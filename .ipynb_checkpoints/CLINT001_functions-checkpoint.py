@@ -9,41 +9,139 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 import cartopy.crs as ccrs
 import cartopy
+import matplotlib.ticker as mticker
+import glob
+
+def add_driver_row (drivers_old, drivers_input, drivers_tmpl,workmetadir):
+
+    if ((drivers_old.loc[(drivers_old['var']==drivers_input['var'][0]) &
+                    (drivers_old['domain']==drivers_input['domain'][0]) &
+                    (drivers_old['exp_size']==drivers_input['exp_size'][0]) &
+                    (drivers_old['cl_nr']==drivers_input['cl_nr'][0])].shape[0]) == 0):
+
+        drivers_addrow = drivers_tmpl
 
 
-def apply_land_sea_mask(targetxr, lsm):
+        for clm in drivers_input.columns:
+            drivers_addrow[clm] = drivers_input[clm]
+
+        if drivers_addrow['var'][0] == 'mslp':
+            drivers_addrow['era5_var'] = 'msl'
+            drivers_addrow['cmip6_var'] = 'pls'
+            drivers_addrow['vmin'] = -20
+            drivers_addrow['vmax'] = 20
+
+        if drivers_addrow['var'][0] == 'tmax':
+            drivers_addrow['era5_var'] = 't2m'
+            drivers_addrow['cmip6_var'] = 'tasmax'
+            drivers_addrow['vmin'] = -10
+            drivers_addrow['vmax'] = 10
+            
+        if drivers_addrow['var'][0] == 'sm':
+            drivers_addrow['era5_var'] = 'swvl1'
+            drivers_addrow['cmip6_var'] = 'mrsos'
+            drivers_addrow['vmin'] = -0.2
+            drivers_addrow['vmax'] = 0.2
+
+        if drivers_addrow['exp_size'][0] == 'low':
+            tot_num_cl = 5
+        if drivers_addrow['exp_size'][0] == 'middle':
+            tot_num_cl = 10
+        if drivers_addrow['exp_size'][0] == 'high':
+            tot_num_cl = 20
+
+        #/data/csp/as18623/CLINT_metadata/Masks/Test5low_Clusters
+        drivers_addrow['clmask_path'] = f"/data/csp/as18623/CLINT_metadata/Masks/Test{drivers_addrow['exp'][0]}{drivers_addrow['exp_size'][0]}_Clusters/"
+
+        maskfile = glob.glob(drivers_addrow['clmask_path'][0] + f"labels??{drivers_addrow['era5_var'][0]}{drivers_addrow['domain'][0]}{tot_num_cl}.csv")[0]
+        mask = pd.read_csv(maskfile,index_col=[0])
+        sub_mask = mask.loc[mask.cluster == drivers_addrow['cl_nr'][0]-1]
+
+        ## determine latlon box for graphical needs
+
+        drivers_addrow['cl_ext_S'] = np.min(sub_mask.nodes_lat) - 1
+        drivers_addrow['cl_ext_N'] = np.max(sub_mask.nodes_lat) + 1
+        drivers_addrow['cl_ext_W'] = np.min(sub_mask.nodes_lon) - 1
+        drivers_addrow['cl_ext_E'] = np.max(sub_mask.nodes_lon) + 1    
+        drivers_addrow['cl_ortho_lat'] = (np.min(sub_mask.nodes_lat)+np.max(sub_mask.nodes_lat))/2
+        drivers_addrow['cl_ortho_lon'] = (np.min(sub_mask.nodes_lon)+np.max(sub_mask.nodes_lon))/2
+
+        drivers_new = pd.concat([drivers_old,drivers_addrow])
+        
+        drivers_new = drivers_new[drivers_tmpl.columns]
+        
+        drivers_new.to_csv(f"{workmetadir}drivers{drivers_addrow['exp'][0]}_Test.csv", index=False)
+        print('YES! Driver correctly added')
+    else:
+        print('NO! This driver has already been added')
+        
+def apply_land_sea_mask(targetxr, lsm, kind):
     
     ## The era5 netcdf is adapted to the format of maskedanom,
     ##  so that the mask can be applied
-    lsm_mask = lsm.reindex(longitude=targetxr.longitude, 
-                            latitude=targetxr.latitude,
-                            method="nearest", 
-                            tolerance=1e-9, 
-                            fill_value=0).squeeze()
+    
+    if (kind == 'hist'):
+        lonfield = 'lon'
+        latfield = 'lat'
+    else:
+        lonfield = 'longitude'
+        latfield = 'latitude'
 
-
+    
+    
+    #lsm_mask = lsm.reindex(longitude=targetxr.longitude, 
+    #                        latitude=targetxr.latitude,
+    #                        method="nearest", 
+    #                        tolerance=1e-9, 
+    #                        fill_value=0).squeeze()
+    lsm_mask = lsm.interp(longitude=targetxr[lonfield], 
+                     latitude=targetxr[latfield], 
+                     method="nearest")
+    lsm_mask = lsm_mask.fillna(0)
+    lsm_mask = lsm_mask.squeeze('time')
     ## Maskedanom is updated removing the gridpoints on the sea
     outputxr = targetxr.where(lsm_mask['lsm'])
     return(outputxr)
 
-def daily_series_w_lags(xrdf, drivers_row, targetdate_ts, what, plotdir):
+def daily_series_w_lags(xrdf, drivers_row, targetdate_ts, what, kind, plotdir):
 
     y = targetdate_ts.year
     m = str(targetdate_ts.month).zfill(2)
     d = str(targetdate_ts.day).zfill(2)
     
+    vmin = drivers_row['vmin']
+    vmax = drivers_row['vmax']
+    
+    
+    if (kind == 'hist'):
+        lonfield = 'lon'
+        latfield = 'lat'
+        nc_var = drivers_row.cmip6_var
+    else:
+        lonfield = 'longitude'
+        latfield = 'latitude'
+        nc_var = drivers_row.era5_var
+    
+    
+    
     if what == 'centroid':
         cc_lon = drivers_row['cluster_centre_lon']
         cc_lat = drivers_row['cluster_centre_lat']
-        cc_ser = xrdf.sel(longitude = cc_lon, latitude = cc_lat)
-        
+        cc_ser = xrdf.sel({lonfield : cc_lon, latfield : cc_lat}, method = 'nearest')        
     if what == 'average':
-        
-        cc_ser = xrdf.mean(dim=['longitude','latitude'])#average on the whole domain
+        cc_ser = xrdf.mean(dim=[lonfield,latfield])#average on the whole domain
+    if what == 'quantiles':        
+        cc_ser75 = xrdf.quantile(q=0.75, dim=[lonfield,latfield])#average on the whole domain
+        cc_ser10 = xrdf.quantile(q=0.10, dim=[lonfield,latfield])#average on the whole domain
+        cc_ser25 = xrdf.quantile(q=0.25, dim=[lonfield,latfield])#average on the whole domain
+        cc_ser50 = xrdf.quantile(q=0.50, dim=[lonfield,latfield])#average on the whole domain
+        cc_ser90 = xrdf.quantile(q=0.90, dim=[lonfield,latfield])#average on the whole domain
+
+
         
     
     var = drivers_row['var']
-    ncvar = drivers_row['nc_var']
+    #ncvar = drivers_row['nc_var']
     cl_name = drivers_row['cluster']
     
     minlag = int(drivers_row['minlag'])
@@ -53,19 +151,27 @@ def daily_series_w_lags(xrdf, drivers_row, targetdate_ts, what, plotdir):
     maxtime_ts = targetdate_ts - pd.DateOffset(days = minlag)# + pd.DateOffset(hours = 12)
     
     plt.rcParams['figure.figsize'] = [16,8]
-    plt.figure()
+    #plt.figure(figsize=((16,8)))
+    fig,ax = plt.subplots()
     if what == 'centroid':
-        cc_ser[ncvar].plot(color='red')
+        cc_ser[nc_var].plot(color='red')
     if what == 'average':
-        cc_ser[ncvar].plot(color='sienna')
-    plt.title(f'{var} daily series ({y}), cluster {cl_name} {what}')
+        cc_ser[nc_var].plot(color='sienna')
+    if what == 'quantiles':
+        ax.fill_between(x=cc_ser10['time'],y1=cc_ser10[nc_var],y2=cc_ser90[nc_var],color='mistyrose')
+        ax.fill_between(x=cc_ser25['time'],y1=cc_ser25[nc_var],y2=cc_ser75[nc_var],color='pink')
+        cc_ser50[nc_var].plot(color='mediumvioletred')
+
+        
+    ax.set_ylim(vmin,vmax)   
+    plt.title(f'{var} daily series ({y}), cluster {cl_name} {what}',fontsize=30)
     plt.axhline(y=0, color='k')
     plt.axvline(x = targetdate_ts, color = 'k', label = 'axvline - full height')
     plt.axvline(x = mintime_ts, color = 'b', label = 'axvline - full height')
     plt.axvline(x = maxtime_ts, color = 'b', label = 'axvline - full height')
     plt.grid()
-    plt.savefig(f"{plotdir}CLINT050_{y}{m}{d}case_{var}_{cl_name}.png", facecolor='w')
-    plt.show()  
+    plt.savefig(f"{plotdir}CLINT050_{y}{m}{d}case_{var}_{cl_name}_{what}.png", facecolor='w')
+    plt.show()
     
 
 def expand_res_grid(submask_row,old_res=2,new_res=0.25):
@@ -83,39 +189,51 @@ def expand_res_grid(submask_row,old_res=2,new_res=0.25):
     add_df.columns = ['nodes_lat','nodes_lon']
     return (add_df)
 
-def loop_map_grids(drivers, dates_ts, variables, lsm, modeldir, maskdir, plotdir):
+def loop_map_grids(drivers, dates_ts, variables, lsm, modelspecs1, modeldir, maskdir, plotdir):
 
     
     for date_ts in dates_ts:
         y = date_ts.year
         #print(y)
+        kind = modelspecs1.iloc[0]['kind']
+        if kind == 'ERA5':
+            datasetnames = 'era5'
+            kind_var = 'era5_var'
+        else:
+            #[print(modelrow) for i, modelrow in modelspecs.iterrows()]
+            datasetnames = sum([[f'{modelrow["modelnames"]}-{kind}-r{mmb}' for mmb in modelrow["members_list"]] for i, modelrow in modelspecs1.iterrows()],[])
+            kind_var = 'cmip6_var'
         for var in variables:
             drivers_sub = drivers.loc[drivers['var'] == var]
-            anom_xr = xr.open_dataset(f'{modeldir}/era5_{var}_dailyanom_{y}_cropped.nc')
-            if var == 'mslp':
-                anom_xr['msl'] = anom_xr['msl']/100
-            for index, drivers_row in drivers_sub.iterrows():
+            nc_var = drivers.loc[drivers['var'] == var].iloc[0][kind_var]
+            for datasetname in datasetnames:
+                anom_xr = xr.open_dataset(f'{modeldir}/{datasetname}_{var}_dailyanom_{y}_cropped.nc')
+                anom_xr = anom_xr.convert_calendar('gregorian')
+                if var == 'mslp':
+                    anom_xr[nc_var] = anom_xr[nc_var]/100
+                for index, drivers_row in drivers_sub.iterrows():
 
 
-                mask_df = pd.read_csv(f"{maskdir}{drivers_row['clmask_test3']}",index_col=[0])
-                cl_nr = drivers_row['cl_nr']
-                submask = mask_df[mask_df.cluster == cl_nr]
-                maskedanom = mask_xr_w_df(var, anom_xr, submask, lsm)
+                    mask_df = pd.read_csv(f"{maskdir}{drivers_row['clmask_test3']}",index_col=[0])
+                    cl_nr = drivers_row['cl_nr']
+                    submask = mask_df[mask_df.cluster == cl_nr]
+                    maskedanom = mask_xr_w_df(var, anom_xr, submask, lsm, kind)
 
-                multimaps_lag (xrdf = maskedanom, targetdate_ts = date_ts, 
-                                     drivers_row = drivers_row, plotdir = plotdir,
-                                     proj = 'Ortographic', 
-                                     vmin='drivers', vmax='drivers')
+                    multimaps_lag (xrdf = maskedanom, targetdate_ts = date_ts, 
+                                        drivers_row = drivers_row, kind=kind, plotdir = plotdir,
+                                        proj = 'Ortographic', 
+                                        vmin='drivers', vmax='drivers')
+                    daily_series_w_lags(maskedanom, drivers_row, date_ts, 'average', kind, plotdir)
+                    daily_series_w_lags(maskedanom, drivers_row, date_ts, 'quantiles', kind, plotdir)
+                    daily_series_w_lags(maskedanom, drivers_row, date_ts, 'centroid', kind, plotdir)
 
-                daily_series_w_lags(anom_xr, drivers_row, date_ts, 'centroid', plotdir)
-                daily_series_w_lags(anom_xr, drivers_row, date_ts, 'average', plotdir)
                 
     
 def map_EuroPP (xrdf, targetdate_ts, lag, drivers_row, vmin, vmax):
     
     targetdate_str = dt.strftime(targetdate_ts,'%Y-%m-%d')
 
-    nc_var = drivers_row.nc_var
+    nc_var = drivers_row.era5_var
     plotdate_ts = targetdate_ts - pd.DateOffset(days = lag) + pd.DateOffset(hours = 12)
     sub1d = xrdf.sel(time=plotdate_ts)
     
@@ -148,7 +266,7 @@ def map_Ortographic (xrdf, targetdate_ts, lag, drivers_row, vmin='drivers', vmax
         vmax = drivers_row['vmax']
     targetdate_str = dt.strftime(targetdate_ts,'%Y-%m-%d')
     var = drivers_row['var']
-    nc_var = drivers_row.nc_var
+    nc_var = drivers_row.era5_var
     plotdate_ts = targetdate_ts - pd.DateOffset(days = lag)# + pd.DateOffset(hours = 12)
     sub1d = xrdf.sel(time=plotdate_ts)
     plt.figure(figsize=(fig_width, fig_height))
@@ -172,7 +290,7 @@ def map_Ortographic (xrdf, targetdate_ts, lag, drivers_row, vmin='drivers', vmax
     plt.show()
     
 
-def mask_xr_w_df (var, xrdf, submask, lsm):
+def mask_xr_w_df (var, xrdf, submask, lsm, kind):
 
     ## Generate coordinates of all gridpoints around the 2x2
     exp_list = [expand_res_grid(row) for index,row in submask.iterrows()] 
@@ -184,32 +302,107 @@ def mask_xr_w_df (var, xrdf, submask, lsm):
 
     mask = submask_exp.assign(flag=1).set_index(["nodes_lon", "nodes_lat"]).flag.to_xarray().fillna(0).rename({"nodes_lon": "longitude", "nodes_lat": "latitude"})
 
-    mask = mask.reindex(longitude=xrdf.longitude, 
-                        latitude=xrdf.latitude,method="nearest", tolerance=1e-9, fill_value=0)
-
-    sub_xrdf = xrdf.where(mask)
+    if (kind == 'hist'):
+        lonfield = 'lon'
+        latfield = 'lat'
+    else:
+        lonfield = 'longitude'
+        latfield = 'latitude'
+    
+    #mask = mask.reindex(longitude=xrdf[lonfield], 
+    #                    latitude=xrdf[latfield],method="nearest", tolerance=1e-9, fill_value=0)
+    mask1 = mask.interp(longitude=xrdf[lonfield], 
+                        latitude=xrdf[latfield], 
+                        method="nearest")
+    mask1 = mask1.fillna(0)
+    sub_xrdf = xrdf.where(mask1)
     
     if var == 'tmax':
-        sub_xrdf = apply_land_sea_mask(sub_xrdf, lsm)
+        sub_xrdf = apply_land_sea_mask(sub_xrdf, lsm, kind)
     
     return(sub_xrdf)
 
    
-def multimaps_lag (xrdf, targetdate_ts, drivers_row, plotdir,
+def multimaps_lag (xrdf, targetdate_ts, drivers_row, kind, plotdir,
                    proj='Ortographic', vmin='drivers', vmax='drivers'):
+    
+    var = drivers_row['var']
+    cl_name = drivers_row['cluster']
+    
     minlag = int(drivers_row['minlag'])
     maxlag = int(drivers_row['maxlag'])
+    
     fig_width = drivers_row['fig_width']
     if np.isnan(fig_width):
         fig_width = 48
+    
+    ## VALUES THAT DEPEND ON THE VARIABLE
+    
+    if vmin == 'drivers':
+        vmin = drivers_row['vmin']
+    if vmax == 'drivers':
+        vmax = drivers_row['vmax']
+        var = drivers_row['var']
+        
+    if kind == 'era5':
+        nc_var = drivers_row.era5_var
+    else:
+        nc_var = drivers_row.cmip6_var
 
+    if var == 'tmax':
+        palette = plt.cm.RdBu_r
+    if var == 'mslp':
+        palette = plt.cm.PRGn_r
+    if var == 'sm':
+        palette = plt.cm.BrBG
+
+    
+    ## DEFINE PROJECTION AND MAP EXTENT
+        
+    my_projn = ccrs.Orthographic(central_longitude=drivers_row['cl_ortho_lon'],
+                                 central_latitude=drivers_row['cl_ortho_lat'])
+    lonlatproj = ccrs.PlateCarree()
+    # These chunk, first takes the limits of the box then calculates the coordinated in the projection
+    # In the last line, the extreme coordinates in the new reference are identified
+    # These extremes are give to set_extent()
+    SW_lon, SW_lat = my_projn.transform_point(drivers_addrow['cl_ext_W'][0], 
+                                            drivers_addrow['cl_ext_S'][0], 
+                                            lonlatproj)  #(0.0, -3189068.5)
+    NE_lon, NE_lat = my_projn.transform_point(drivers_addrow['cl_ext_E'][0], 
+                                            drivers_addrow['cl_ext_N'][0], 
+                                            lonlatproj) #(3189068.5, 0)
+    NW_lon, NW_lat = my_projn.transform_point(drivers_addrow['cl_ext_W'][0], 
+                                            drivers_addrow['cl_ext_N'][0], 
+                                            lonlatproj)  #(0.0, -3189068.5)
+    SE_lon, SE_lat = my_projn.transform_point(drivers_addrow['cl_ext_E'][0], 
+                                            drivers_addrow['cl_ext_S'][0], 
+                                            lonlatproj) #(3189068.5, 0)
+    SC_lon, SC_lat = my_projn.transform_point(drivers_addrow['cl_ortho_lon'][0], 
+                                            drivers_addrow['cl_ext_S'][0], 
+                                            lonlatproj) #(3189068.5, 0)
+    NC_lon, NC_lat = my_projn.transform_point(drivers_addrow['cl_ortho_lon'][0], 
+                                            drivers_addrow['cl_ext_N'][0], 
+                                            lonlatproj) #(3189068.5, 0)
+
+    xmin,xmax,ymin,ymax = min(SW_lon,NW_lon), max(NE_lon,SE_lon), min(SW_lat,SE_lat,SC_lat), max(NE_lat,NW_lat, NC_lat)
+        
+    ## DEFINE SIZE OF SUBPLOTS
+    
+    numfigs = len(range(minlag,maxlag+1)) ## number of figures depends on how many days
+    numfigs_h = np.floor((12000000/(xmax-xmin)+3)/2) ## number of figures per row depends on the size of the cluster
+    numfigs_v = np.ceil(numfigs/numfigs_h) ## number of rows is calculated by consequence
+
+    map_ratio = (xmax-xmin)/(ymax-ymin) ## width divided by height
+    
     ax_width = drivers_row['ax_width']
-    if np.isnan(ax_width):
-        ax_width = 12
+    if np.isnan(ax_width):        
+        ax_width = fig_width-1/numfigs_h    
 
     ax_height = drivers_row['ax_height']
     if np.isnan(ax_height):
-        ax_height = 8
+        ax_height = ax_width/map_ratio
+        
+    ## DEFINE WHERE TO WRITE THE LAG    
 
     text_plot_lon = drivers_row['text_plot_lon']
     if np.isnan(text_plot_lon):
@@ -218,66 +411,56 @@ def multimaps_lag (xrdf, targetdate_ts, drivers_row, plotdir,
     text_plot_lat = drivers_row['text_plot_lat']
     if np.isnan(text_plot_lat):
         text_plot_lat = drivers_row['cl_ext_N']-2
+        
+    ## IDENTIFY THE DATES
 
-    targetdate_str = dt.strftime(targetdate_ts,'%Y-%m-%d')
+    targetdate_str = dt.strftime(targetdate_ts,'%Y-%m-%d %H')
     
     y = targetdate_ts.year
     m = str(targetdate_ts.month).zfill(2)
     d = str(targetdate_ts.day).zfill(2)
-
     
-    var = drivers_row['var']
     # Determine extremes of the date range considered, in the netcdf every day has 12:00 as hour
     mintime_ts = targetdate_ts - pd.DateOffset(days = maxlag) + pd.DateOffset(hours = 12)
     maxtime_ts = targetdate_ts - pd.DateOffset(days = minlag) + pd.DateOffset(hours = 12)
 
     mintime_str = dt.strftime(mintime_ts,'%Y-%m-%d')
     maxtime_str = dt.strftime(mintime_ts,'%Y-%m-%d')
-
-    numfigs = len(range(minlag,maxlag+1))
-    numfigs_h = np.floor(fig_width/ax_width)
-    numfigs_v = np.ceil(numfigs/numfigs_h)
+    
+    targetdate_str = dt.strftime(targetdate_ts,'%Y-%m-%d')
 
 
-    cl_name = drivers_row['cluster']
-    proj = ccrs.PlateCarree()
+    
+
     fig, axs = plt.subplots(int(numfigs_v), int(numfigs_h),
-                            subplot_kw={'projection': proj},
+                            subplot_kw={'projection': lonlatproj},
                             figsize=(fig_width,int(numfigs_v*ax_height)),
                             sharey=True,sharex=True)#,
                             #layout="constrained")
     fig.suptitle(f'{var}, {minlag} to {maxlag} days before {targetdate_str}', fontsize = 100)
-    axs = axs.flatten()
+    axs = axs.flatten()        
+        
+    
+
     for f,lag in enumerate(range(minlag,maxlag+1)):
 
-        if vmin == 'drivers':
-            vmin = drivers_row['vmin']
-        if vmax == 'drivers':
-            vmax = drivers_row['vmax']
-        var = drivers_row['var']
-        nc_var = drivers_row.nc_var
-        
-        if var == 'tmax':
-            palette = plt.cm.RdBu_r
-        if var == 'mslp':
-            palette = plt.cm.PRGn_r
-        if var == 'sm':
-            palette = plt.cm.BrBG
-        
-        targetdate_str = dt.strftime(targetdate_ts,'%Y-%m-%d')
         
 
         plotdate_ts = targetdate_ts - pd.DateOffset(days = lag)# + pd.DateOffset(hours = 12)
+        #print(plotdate_ts)
         sub1d = xrdf.sel(time=plotdate_ts)
         axs[f].remove()
         geo_axes = plt.subplot(int(numfigs_v), int(numfigs_h), f+1,
-                               projection=ccrs.Orthographic(central_longitude=drivers_row['cl_ortho_lon'],
-                                                            central_latitude=drivers_row['cl_ortho_lat']))
+                               projection=my_projn)
         
         cs=sub1d[nc_var].plot(ax=geo_axes,transform=ccrs.PlateCarree(),cmap=palette, 
                            vmin = vmin, vmax = vmax,add_colorbar=False)
-        geo_axes.set_extent(drivers_row[['cl_ext_W','cl_ext_E','cl_ext_S','cl_ext_N']])    
-        geo_axes.scatter(x=drivers_row['cluster_centre_lon'], y=drivers_row['cluster_centre_lat'],
+        
+        
+        
+        
+        
+        geo_axes.scatter(x=drivers_row['cluster_centroid_lon'], y=drivers_row['cluster_centroid_lat'],
                     marker='X',color='black',s=900,transform=ccrs.PlateCarree(),alpha=1)
         geo_axes.coastlines()
         geo_axes.add_feature(cartopy.feature.BORDERS, linestyle='-', alpha=.5)
@@ -285,8 +468,10 @@ def multimaps_lag (xrdf, targetdate_ts, drivers_row, plotdir,
         #              s=f'-{lag}d', transform=ccrs.PlateCarree(), fontsize=70)
         geo_axes.text(x=0.875, y=0.9, horizontalalignment='center', verticalalignment='center',
                       s=f'-{lag}d', transform=geo_axes.transAxes, fontsize=70)
-        
-        geo_axes.gridlines()
+        geo_axes.set_extent([xmin,xmax,ymin,ymax], crs=my_projn) # data/projection coordinates  
+        gl = geo_axes.gridlines(proj,linewidth=0.5, color='lightgray', alpha=0.5)
+        gl.xlocator = mticker.FixedLocator(np.arange(-180, 180, 5))
+        gl.ylocator = mticker.FixedLocator(np.arange(-90, 90, 5))
         plt.title(None)
         #plt.title(f'-{lag}d', fontsize = 50)
         #geo_axes._legend.remove()
