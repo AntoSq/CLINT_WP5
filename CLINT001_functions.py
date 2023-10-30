@@ -492,7 +492,7 @@ def multimaps_lag (xrdf, targetdate_ts, drivers_row, kind, plotdir,
         geo_axes.text(x=0.875, y=0.9, horizontalalignment='center', verticalalignment='center',
                       s=f'-{lag}d', transform=geo_axes.transAxes, fontsize=70)
         geo_axes.set_extent([xmin,xmax,ymin,ymax], crs=my_projn) # data/projection coordinates  
-        gl = geo_axes.gridlines(my_projn,linewidth=0.5, color='lightgray', alpha=0.5)
+        gl = geo_axes.gridlines(lonlatproj,linewidth=2, color='lightgray', alpha=0.5)
         gl.xlocator = mticker.FixedLocator(np.arange(-180, 180, 5))
         gl.ylocator = mticker.FixedLocator(np.arange(-90, 90, 5))
         plt.title(None)
@@ -510,10 +510,11 @@ def multimaps_lag (xrdf, targetdate_ts, drivers_row, kind, plotdir,
     cbar_ax = fig.add_axes([0.07, 0.03, 0.86,1/(numfigs_v*ax_height)])
 
     cbar=fig.colorbar(cs, cax=cbar_ax, orientation='horizontal')
+    cbar.set_label(f"[{drivers_row['unit']}]",fontsize=50)
     cbar.ax.tick_params(labelsize=50)
     
 
-    #plt.savefig(f"{plotdir}CLINT040_maps_{y}{m}{d}case_{var}_{cl_name}.png", facecolor='w')
+    #plt.savefig(f"{plotdir}CLINT040_maps_{y}{m}{d}case_{var}_Test{drivers_row['exp']}{drivers_row['exp_size']}{cl_name}.png", facecolor='w')
     
     
     
