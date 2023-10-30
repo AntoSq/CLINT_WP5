@@ -1,0 +1,4 @@
+var,unit,era5_var,cmip6_var,var4path,vmin,vmax
+tmax,°C,t2m,tasmax,mx2t,-10.0,10.0
+mslp,hPa,msl,psl,msl,-20.0,20.0
+sm,m^3/m^3,swvl1,mrsos,sm1,-0.2,0.2
