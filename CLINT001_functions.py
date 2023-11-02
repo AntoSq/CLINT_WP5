@@ -194,7 +194,13 @@ def daily_series_w_lags(xrdf, drivers_row, targetdate_ts, what, kind, plotdir):
     plt.grid()
     plt.savefig(f"{plotdir}CLINT050_{y}{m}{d}case_{var}_{cl_name}_{what}.png", facecolor='w')
     plt.show()
-    
+
+def calc_clim (var,tres,product,experiment,ensemble,year_start,year_stop,path):
+    ## calculate climatology of a given xarray dataset
+    list4clim = [f"{ERA5path}{var}_{tres}_{product}_{experiment}_{ensemble}_{y}0101-{y}1231.nc" for y in range(year_start,year_stop+1)]
+    baseclim = xr.open_mfdataset(list4clim)
+    xr_clim = baseclim.groupby("time.dayofyear").mean("time")
+    return (xr_clim)
 
 def expand_res_grid(submask_row,old_res=0.5,new_res=0.25):
 
@@ -516,7 +522,12 @@ def multimaps_lag (xrdf, targetdate_ts, drivers_row, kind, plotdir,
 
     #plt.savefig(f"{plotdir}CLINT040_maps_{y}{m}{d}case_{var}_Test{drivers_row['exp']}{drivers_row['exp_size']}{cl_name}.png", facecolor='w')
     
-    
+def rearrange_lon (xrdf):
+    ## Rearrange longitude of xarray datasets where longitudes are in the [0,360) range
+    ## Longitudes are translated to [-180,180)
+    test = xrdf.assign_coords(lon=(((clim8110.lon + 180) % 360) - 180))
+    test = test.sortby(test.lon)
+    return(test)
     
 def set_maps_lag (xrdf, targetdate_ts, drivers_row, proj, vmin='drivers', vmax='drivers',
                   fig_width = 8, fig_height = 8):
