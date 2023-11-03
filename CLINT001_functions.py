@@ -197,7 +197,7 @@ def daily_series_w_lags(xrdf, drivers_row, targetdate_ts, what, kind, plotdir):
 
 def calc_clim (var,tres,product,experiment,ensemble,year_start,year_stop,path):
     ## calculate climatology of a given xarray dataset
-    list4clim = [f"{ERA5path}{var}_{tres}_{product}_{experiment}_{ensemble}_{y}0101-{y}1231.nc" for y in range(year_start,year_stop+1)]
+    list4clim = [f"{path}{var}_{tres}_{product}_{experiment}_{ensemble}_{y}0101-{y}1231.nc" for y in range(year_start,year_stop+1)]
     baseclim = xr.open_mfdataset(list4clim)
     xr_clim = baseclim.groupby("time.dayofyear").mean("time")
     return (xr_clim)
@@ -230,6 +230,7 @@ def loop_map_grids(drivers, dates_ts, variables, lsm, modelspecs1, modeldir, mas
         else:
             #[print(modelrow) for i, modelrow in modelspecs.iterrows()]
             datasetnames = sum([[f'{modelrow["modelnames"]}-{kind}-r{mmb}' for mmb in modelrow["members_list"]] for i, modelrow in modelspecs1.iterrows()],[])
+            datasetnames =
             kind_var = 'cmip6_var'
         for var in variables:
             drivers_sub = drivers.loc[drivers['var'] == var]
@@ -525,7 +526,7 @@ def multimaps_lag (xrdf, targetdate_ts, drivers_row, kind, plotdir,
 def rearrange_lon (xrdf):
     ## Rearrange longitude of xarray datasets where longitudes are in the [0,360) range
     ## Longitudes are translated to [-180,180)
-    test = xrdf.assign_coords(lon=(((clim8110.lon + 180) % 360) - 180))
+    test = xrdf.assign_coords(lon=(((xrdf.lon + 180) % 360) - 180))
     test = test.sortby(test.lon)
     return(test)
     
