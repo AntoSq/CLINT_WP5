@@ -202,6 +202,87 @@ def calc_clim (var,tres,product,experiment,ensemble,year_start,year_stop,path):
     xr_clim = baseclim.groupby("time.dayofyear").mean("time")
     return (xr_clim)
 
+def cdo_anom(nc_var,y,product,experiment,mmb,inpath,outpath):
+    
+    """
+    Call CDO to calculate anomaly for the indicated year
+    
+    Antonello A. Squintu 2023-11-05
+    
+    Parameters
+    ----------
+    nc_var: str
+        variable name, as it appears in the name of the file and in the path
+    y: int
+        target year (e.g. 1981)
+    product: str
+        name of the product (e.g. 'reanalysis')
+    experiment: str
+        name of the experiment according to Freva (e.g. 'era5',...)
+    mmb: int
+        number of the ensemble member
+    inpath: str
+        full path where the input files are stored
+    outpath: str
+        full path where the output files are to be stored
+        
+    
+    Returns
+    -------
+        Creates netcdf file in outpath
+    
+    """
+
+    infile = f'{inpath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc'
+    climfile = f'{outpath}{nc_var}_dailyclim_{product}_{experiment}_r{mmb}i1p1_clim8110.nc'
+    outfile = f'{outpath}{nc_var}_dailyanom_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc'
+    os.system(f'cdo -b 32 -ydaysub {infile} {climfile} {outfile}')
+
+def cdo_clim(nc_var,year_start,year_stop,product,experiment,mmb,inpath,outpath):
+    
+    """
+    Call CDO to calculate climatology
+    
+    Antonello A. Squintu 2023-11-05
+    
+    Parameters
+    ----------
+    nc_var: str
+        variable name, as it appears in the name of the file and in the path
+    year_start: int
+        first year in the range of the reference period (e.g. 1981)
+    year_stop: int
+        last year in the range of the reference period (e.g. 2010)
+    product: str
+        name of the product (e.g. 'reanalysis')
+    experiment: str
+        name of the experiment according to Freva (e.g. 'era5',...)
+    mmb: int
+        number of the ensemble member
+    inpath: str
+        full path where the input files are stored
+    outpath: str
+        full path where the output files are to be stored
+        
+    
+    Returns
+    -------
+        Creates netcdf file in outpath
+    
+    """
+    ## Copy the yearly files needed to calculate the climatology and name them temp_yyyy.nc, so thath
+    ## you can call them within cdo ydayrunmean
+    for y in range(year_start,year_stop+1):
+        infile = f'{inpath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc'
+        outfile = f'{outpath}temp_{y}.nc'
+        os.system(f'cp {infile} {outfile} ')
+    ## Calculate daily climatology with a 31-days running window
+    infile = f'{outpath}temp_*.nc'
+    outfile = f'{outpath}{nc_var}_dailyclim_{product}_{experiment}_r{mmb}i1p1_clim8110.nc'
+    os.system(f'cdo -b 32 -ydrunmean,31 -cat "{infile}" "{outfile}"')
+    os.system(f'rm {outpath}temp_*.nc')
+
+
 def expand_res_grid(submask_row,old_res=0.5,new_res=0.25):
 
     exp_start_lon = submask_row['nodes_lon'] - old_res/2
@@ -217,42 +298,82 @@ def expand_res_grid(submask_row,old_res=0.5,new_res=0.25):
     add_df.columns = ['nodes_lat','nodes_lon']
     return (add_df)
 
-def loop_map_grids(drivers, dates_ts, variables, lsm, modelspecs1, modeldir, maskdir, plotdir):
+def loop_map_grids(drivers, dates_ts, variables, lsm, modelspecs1, varspecs, machine, modeldir, maskdir, plotdir):
 
     
     for date_ts in dates_ts:
         y = date_ts.year
         #print(y)
         kind = modelspecs1.iloc[0]['kind']
-        if kind == 'ERA5':
-            datasetnames = ['era5']
-            kind_var = 'era5_var'
-        else:
-            #[print(modelrow) for i, modelrow in modelspecs.iterrows()]
-            datasetnames = sum([[f'{modelrow["modelnames"]}-{kind}-r{mmb}' for mmb in modelrow["members_list"]] for i, modelrow in modelspecs1.iterrows()],[])
-            datasetnames =
-            kind_var = 'cmip6_var'
         for var in variables:
+            varrow = varspecs.loc[varspecs['var'] == var]
             drivers_sub = drivers.loc[drivers['var'] == var]
-            nc_var = drivers.loc[drivers['var'] == var].iloc[0][kind_var]
-            for datasetname in datasetnames:
-                anom_xr = xr.open_dataset(f'{modeldir}/{datasetname}_{var}_dailyanom_{y}_cropped.nc')
-                anom_xr = anom_xr.convert_calendar('gregorian')
-                if var == 'mslp':
-                    anom_xr[nc_var] = anom_xr[nc_var]/100
-                for index, drivers_row in drivers_sub.iterrows():
-                    mask_df = pd.read_csv(f"{drivers_row['clmask_file']}",index_col=[0])
-                    cl_nr = drivers_row['cl_nr']
-                    submask = mask_df[mask_df.cluster == cl_nr-1] #python indexing, cluster 1 is nr0 in the mask file...
-                    maskedanom = mask_xr_w_df(var, anom_xr, submask, lsm, kind)
 
-                    multimaps_lag (xrdf = maskedanom, targetdate_ts = date_ts, 
-                                        drivers_row = drivers_row, kind=kind, plotdir = plotdir,
-                                        proj = 'Ortographic', 
-                                        vmin='drivers', vmax='drivers')
-                    daily_series_w_lags(maskedanom, drivers_row, date_ts, 'average', kind, plotdir)
-                    daily_series_w_lags(maskedanom, drivers_row, date_ts, 'quantiles', kind, plotdir)
-                    #daily_series_w_lags(maskedanom, drivers_row, date_ts, 'centroid', kind, plotdir)
+            if kind == 'ERA5':
+                #datasetnames = ['era5']
+                kind_var = 'era5_var'
+                kind_aggr = 'era5_aggr'
+                #if machine == 'DKRZ':
+                #    datapaths = sum([[f"{modeldir1}{varrow[kind_aggr][0]}/atmos/{nc_var}/r{mmb}i1p1/" for mmb in modelrow["members_list"]] for i, modelrow in modelspecs1.iterrows()],[])
+                experiment = 'era5'
+                product = 'reanalysis'
+                tres = varrow['era5_aggr'][0]
+                year_start = 1981
+                year_stop = 2010
+
+            else:
+                #[print(modelrow) for i, modelrow in modelspecs.iterrows()]
+                datapaths = sum([[f'{modelrow["modelnames"]}-{kind}-r{mmb}' for mmb in modelrow["members_list"]] for i, modelrow in modelspecs1.iterrows()],[])
+                kind_var = 'cmip6_var'
+                kind_aggr = 'cmip6_aggr'
+
+            if machine == 'DKRZ':
+                kind_var = 'cmip6_var'
+
+            nc_var = varrow[kind_var].values[0]
+            
+            models = modelspecs1['model_names'].to_list()
+            for mdl in models:
+                mdl = models[0]
+                modelpath = modelspecs1.loc[modelspecs1['model_names']==mdl,'model_path'].values[0]
+                workpath = modelspecs1.loc[modelspecs1['model_names']==mdl,'work_path'].values[0]
+                members = modelspecs1.loc[modelspecs1['model_names']==mdl,'members_list'].values[0]
+                
+                for mmb in members:
+    
+                    dkrzpath = f"{modelpath}{varrow[kind_aggr].values[0]}/atmos/{nc_var}/r{mmb}i1p1/"
+                    if not os.path.exists(f'{workdir}{nc_var}_dailyanom_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc')
+                        ## Check if daily data are there
+                        
+                        ## If not, aggregate hourly data to daily resolution
+                        
+                        ## Calculate climatology (if not yet)
+                        if not os.path.exists(f'{workpath}{nc_var}_dailyclim_{product}_{experiment}_r{mmb}i1p1_clim8110.nc'):
+                            cdo_clim(nc_var=nc_var,
+                                     year_start=year_start,year_stop=year_stop,
+                                     product=product,experiment=experiment,mmb=mmb,
+                                     inpath=dkrzpath,outpath=workpath)
+                        ## Calculate anomaly (if not yet)
+                        if not os.path.exists(f'{workpath}{nc_var}_dailyanom_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc'):    
+                            cdo_anom(nc_var,y,product,experiment,mmb,inpath,outpath)
+                    
+                    anom_xr = xr.open_dataset(f'{modeldir}/{datasetname}_{var}_dailyanom_{y}_cropped.nc')
+                    anom_xr = anom_xr.convert_calendar('gregorian')
+                    if var == 'mslp':
+                        anom_xr[nc_var] = anom_xr[nc_var]/100
+                    for index, drivers_row in drivers_sub.iterrows():
+                        mask_df = pd.read_csv(f"{drivers_row['clmask_file']}",index_col=[0])
+                        cl_nr = drivers_row['cl_nr']
+                        submask = mask_df[mask_df.cluster == cl_nr-1] #python indexing, cluster 1 is nr0 in the mask file...
+                        maskedanom = mask_xr_w_df(var, anom_xr, submask, lsm, kind)
+
+                        multimaps_lag (xrdf = maskedanom, targetdate_ts = date_ts, 
+                                            drivers_row = drivers_row, kind=kind, plotdir = plotdir,
+                                            proj = 'Ortographic', 
+                                            vmin='drivers', vmax='drivers')
+                        daily_series_w_lags(maskedanom, drivers_row, date_ts, 'average', kind, plotdir)
+                        daily_series_w_lags(maskedanom, drivers_row, date_ts, 'quantiles', kind, plotdir)
+                        #daily_series_w_lags(maskedanom, drivers_row, date_ts, 'centroid', kind, plotdir)
 
                 
     
