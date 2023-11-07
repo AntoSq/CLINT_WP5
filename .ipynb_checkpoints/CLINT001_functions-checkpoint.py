@@ -11,6 +11,8 @@ import cartopy.crs as ccrs
 import cartopy
 import matplotlib.ticker as mticker
 import glob
+import os
+
 
 def add_driver_row (drivers_old, drivers_input, drivers_tmpl, var_specs, workmetadir):
 
@@ -71,8 +73,8 @@ def add_driver_row (drivers_old, drivers_input, drivers_tmpl, var_specs, workmet
             tot_num_cl = 20
 
         #/data/csp/as18623/CLINT_metadata/Masks/Test5low_Clusters
-        drivers_addrow['clmask_path'] = f"/data/csp/as18623/CLINT_metadata/Masks/Test{drivers_addrow['exp'][0]}{drivers_addrow['exp_size'][0]}_Clusters/"
-        maskfile = glob.glob(drivers_addrow['clmask_path'][0] + f"labels??{var4path}{drivers_addrow['domain'][0]}{tot_num_cl}.csv")[0]
+        drivers_addrow['clmask_path'] = f"Test{drivers_addrow['exp'][0]}{drivers_addrow['exp_size'][0]}_Clusters/"
+        maskfile = glob.glob(f"labels??{var4path}{drivers_addrow['domain'][0]}{tot_num_cl}.csv")[0]
         drivers_addrow['clmask_file'] = maskfile 
         mask = pd.read_csv(maskfile,index_col=[0])
         sub_mask = mask.loc[mask.cluster == drivers_addrow['cl_nr'][0]-1]
@@ -102,22 +104,15 @@ def apply_land_sea_mask(targetxr, lsm, kind):
     ## The era5 netcdf is adapted to the format of maskedanom,
     ##  so that the mask can be applied
     
-    if (kind == 'hist'):
-        lonfield = 'lon'
-        latfield = 'lat'
-    else:
-        lonfield = 'longitude'
-        latfield = 'latitude'
-
-    
+        
     
     #lsm_mask = lsm.reindex(longitude=targetxr.longitude, 
     #                        latitude=targetxr.latitude,
     #                        method="nearest", 
     #                        tolerance=1e-9, 
     #                        fill_value=0).squeeze()
-    lsm_mask = lsm.interp(longitude=targetxr[lonfield], 
-                     latitude=targetxr[latfield], 
+    lsm_mask = lsm.interp(longitude=targetxr['lon'], 
+                     latitude=targetxr['lat'], 
                      method="nearest")
     lsm_mask = lsm_mask.fillna(0)
     lsm_mask = lsm_mask.squeeze('time')
@@ -135,29 +130,23 @@ def daily_series_w_lags(xrdf, drivers_row, targetdate_ts, what, kind, plotdir):
     vmax = drivers_row['vmax']
     
     
-    if (kind == 'hist'):
-        lonfield = 'lon'
-        latfield = 'lat'
-        nc_var = drivers_row.cmip6_var
-    else:
-        lonfield = 'longitude'
-        latfield = 'latitude'
-        nc_var = drivers_row.era5_var
+    nc_var = drivers_row.cmip6_var
+
     
     
     
     if what == 'centroid':
         cc_lon = drivers_row['cluster_centre_lon']
         cc_lat = drivers_row['cluster_centre_lat']
-        cc_ser = xrdf.sel({lonfield : cc_lon, latfield : cc_lat}, method = 'nearest')        
+        cc_ser = xrdf.sel({'lon' : cc_lon, 'lat' : cc_lat}, method = 'nearest')        
     if what == 'average':
-        cc_ser = xrdf.mean(dim=[lonfield,latfield])#average on the whole domain
+        cc_ser = xrdf.mean(dim=['lon','lat'])#average on the whole domain
     if what == 'quantiles':        
-        cc_ser75 = xrdf.quantile(q=0.75, dim=[lonfield,latfield])#average on the whole domain
-        cc_ser10 = xrdf.quantile(q=0.10, dim=[lonfield,latfield])#average on the whole domain
-        cc_ser25 = xrdf.quantile(q=0.25, dim=[lonfield,latfield])#average on the whole domain
-        cc_ser50 = xrdf.quantile(q=0.50, dim=[lonfield,latfield])#average on the whole domain
-        cc_ser90 = xrdf.quantile(q=0.90, dim=[lonfield,latfield])#average on the whole domain
+        cc_ser75 = xrdf.quantile(q=0.75, dim=['lon','lat'])#average on the whole domain
+        cc_ser10 = xrdf.quantile(q=0.10, dim=['lon','lat'])#average on the whole domain
+        cc_ser25 = xrdf.quantile(q=0.25, dim=['lon','lat'])#average on the whole domain
+        cc_ser50 = xrdf.quantile(q=0.50, dim=['lon','lat'])#average on the whole domain
+        cc_ser90 = xrdf.quantile(q=0.90, dim=['lon','lat'])#average on the whole domain
 
 
         
@@ -232,7 +221,7 @@ def cdo_anom(nc_var,y,product,experiment,mmb,inpath,outpath):
         Creates netcdf file in outpath
     
     """
-
+    print(f'Producing daily anomalies netcdf for {nc_var}, year {y}')
     infile = f'{inpath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc'
     climfile = f'{outpath}{nc_var}_dailyclim_{product}_{experiment}_r{mmb}i1p1_clim8110.nc'
     outfile = f'{outpath}{nc_var}_dailyanom_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc'
@@ -270,6 +259,7 @@ def cdo_clim(nc_var,year_start,year_stop,product,experiment,mmb,inpath,outpath):
         Creates netcdf file in outpath
     
     """
+    print(f'Producing climatology netcdf for {nc_var}, from {year_start} to {year_stop}')
     ## Copy the yearly files needed to calculate the climatology and name them temp_yyyy.nc, so thath
     ## you can call them within cdo ydayrunmean
     for y in range(year_start,year_stop+1):
@@ -277,12 +267,50 @@ def cdo_clim(nc_var,year_start,year_stop,product,experiment,mmb,inpath,outpath):
         outfile = f'{outpath}temp_{y}.nc'
         os.system(f'cp {infile} {outfile} ')
     ## Calculate daily climatology with a 31-days running window
-    infile = f'{outpath}temp_*.nc'
+    infiles = f'{outpath}temp_*.nc'
     outfile = f'{outpath}{nc_var}_dailyclim_{product}_{experiment}_r{mmb}i1p1_clim8110.nc'
-    os.system(f'cdo -b 32 -ydrunmean,31 -cat "{infile}" "{outfile}"')
+    os.system(f'cdo -b 32 -ydrunmean,31 -cat "{infiles}" "{outfile}"')
     os.system(f'rm {outpath}temp_*.nc')
 
-
+def cdo_daily_aggr(nc_var,y,aggr_operator,product,experiment,mmb,inpath,outpath): 
+    
+    """
+    Call CDO to calculate climatology
+    
+    Antonello A. Squintu 2023-11-07
+    
+    Parameters
+    ----------
+    nc_var: str
+        variable name, as it appears in the name of the file and in the path
+    y: int
+        year (e.g. 1981)
+    aggr_operator: str
+        which operator apply to hourly values to get daily values (e.g. 'mean','max')
+    product: str
+        name of the product (e.g. 'reanalysis')
+    experiment: str
+        name of the experiment according to Freva (e.g. 'era5',...)
+    mmb: int
+        number of the ensemble member
+    inpath: str
+        full path where the input files are stored
+    outpath: str
+        full path where the output files are to be stored
+        
+    
+    Returns
+    -------
+        Creates netcdf file in outpath
+    
+    """
+    print(f'Producing file with daily data for {nc_var}, year {y}')
+    infiles = f'{inpath}{nc_var}_1hr_{product}_{experiment}_r{mmb}i1p1_{y}*-{y}*.nc'
+    outfile = f'{outpath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc'
+    os.system(f'cdo day{aggr_operator} -mergetime {infiles} {outfile}')
+    
+    
+    
 def expand_res_grid(submask_row,old_res=0.5,new_res=0.25):
 
     exp_start_lon = submask_row['nodes_lon'] - old_res/2
@@ -298,11 +326,108 @@ def expand_res_grid(submask_row,old_res=0.5,new_res=0.25):
     add_df.columns = ['nodes_lat','nodes_lon']
     return (add_df)
 
-def loop_map_grids(drivers, dates_ts, variables, lsm, modelspecs1, varspecs, machine, modeldir, maskdir, plotdir):
+def get_anom_w_cdo(nc_var, y, kind, year_start, year_stop, aggr_operator, tres, product,experiment,mmb, mmbpath, workpath):
+    """
+    Get yearly files with daily anomalies, when not available
+    
+    Antonello A. Squintu 2023-11-07
+    
+    Parameters
+    ----------
+    nc_var: str
+        variable name, as it appears in the name of the file and in the path
+    y: int
+        year (e.g. 1981)
+    kind: str
+        'era5' or 'cmip6'
+    year_start: int
+        first year in the range of the reference period (e.g. 1981)
+    year_stop: int
+        last year in the range of the reference period (e.g. 2010)
+    aggr_operator: str
+        which operator apply to hourly values to get daily values (e.g. 'mean','max')
+    tres: str
+        time resolution of the input files (e.g. 'day','1hr')
+    product: str
+        name of the product (e.g. 'reanalysis')
+    experiment: str
+        name of the experiment according to Freva (e.g. 'era5',...)
+    mmb: int
+        number of the ensemble member
+    mmbpath: str
+        full path where to find the original netcdf format according to Levante-Freva
+    workpath: str
+        full path where the output files are to be stored        
+    
+    Returns
+    -------
+        Creates netcdf file in workpath
+    
+    """
 
+    endmonth = get_endmonth(y) #obtain the last of day of each month for this year
+    ## If daily values are not available on DKRZ - Levante, get them
+    if tres == '1hr':
+        dailypath = workpath
+        ## If daily values haven't been calculated yet
+        if not (os.path.exists(f'{workpath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc')):
+            ## Check if we have all the hourly files for all months of that year
+            monthly_files_exist = [os.path.exists(f'{mmbpath}{nc_var}_{tres}_{product}_{experiment}_r{mmb}i1p1_{y}{str(m).zfill(2)}01-{y}{str(m).zfill(2)}{endmonth[m-1]}.nc') for m in range(1,13)]
+            if sum(monthly_files_exist)==12:
+                
+                cdo_daily_aggr(nc_var,y,aggr_operator,product,experiment,mmb,mmbpath,workpath)
+            elif not os.path.exists(f'{workdir}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231_cropped.nc'):
+                print(kind)
+                print(var)
+                print(year)
+                print('Hourly data not available on DKRZ-Levente. Import data from JUNO/ZEUS')  
+                sys.exit()
+
+    if tres == 'day':
+        dailypath = mmbpath
+        #If there's no yearly file with daily data
+        if not os.path.exists(f'{mmbpath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc'):
+                print(kind)
+                print(var)
+                print(year)
+                print('Daily data not available on DKRZ-Levente. Import data from JUNO/ZEUS')  
+                sys.exit()
+
+
+    ## Calculate climatology (if not yet)
+    if not os.path.exists(f'{workpath}{nc_var}_dailyclim_{product}_{experiment}_r{mmb}i1p1_clim8110.nc'):
+        yearly_files_exist = [os.path.exists(f'{dailypath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc') for y in range(year_start,year_stop+1)]
+        ## Are there all the needed 30 files?
+        if sum(yearly_files_exist)!=30:
+            print(f'{nc_var}, some missing files of daily data between {year_start} and {year_stop}')
+            for y in range(year_start,year_stop+1):
+                ## Is there a yearly file with daily data?
+                if not os.path.exists(f'{workpath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc'):
+                    cdo_daily_aggr(nc_var,y,aggr_operator,product,experiment,mmb,mmbpath,workpath)
+                else:
+                    print(f'Daily netcdf for {nc_var} about year {y} already exists')
+        cdo_clim(nc_var=nc_var,
+                 year_start=year_start,year_stop=year_stop,
+                 product=product,experiment=experiment,mmb=mmb,
+                 inpath=dailypath,outpath=workpath)    
+    cdo_anom(nc_var=nc_var,y=y,
+             product=product,experiment=experiment,mmb=mmb,
+             inpath=dailypath,outpath=workpath)
+
+def get_endmonth(y):
+    
+    endmonth = [31,28,31,30,31,30,31,31,30,31,30,31]
+    if ((y%4 == 0) & ((not y%100==0) | (y%400==0))):
+        endmonth[1] = 29
+    return(endmonth)
+
+    
+    
+def loop_map_grids(drivers, dates_ts, variables, lsm, modelspecs1, varspecs, machine, modeldir, maskdir, plotdir):
     
     for date_ts in dates_ts:
         y = date_ts.year
+        
         #print(y)
         kind = modelspecs1.iloc[0]['kind']
         for var in variables:
@@ -331,6 +456,7 @@ def loop_map_grids(drivers, dates_ts, variables, lsm, modelspecs1, varspecs, mac
                 kind_var = 'cmip6_var'
 
             nc_var = varrow[kind_var].values[0]
+            aggr_operator = varrow['aggr_operator'].values[0]
             
             models = modelspecs1['model_names'].to_list()
             for mdl in models:
@@ -342,20 +468,13 @@ def loop_map_grids(drivers, dates_ts, variables, lsm, modelspecs1, varspecs, mac
                 for mmb in members:
     
                     dkrzpath = f"{modelpath}{varrow[kind_aggr].values[0]}/atmos/{nc_var}/r{mmb}i1p1/"
-                    if not os.path.exists(f'{workdir}{nc_var}_dailyanom_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc')
-                        ## Check if daily data are there
-                        
-                        ## If not, aggregate hourly data to daily resolution
-                        
-                        ## Calculate climatology (if not yet)
-                        if not os.path.exists(f'{workpath}{nc_var}_dailyclim_{product}_{experiment}_r{mmb}i1p1_clim8110.nc'):
-                            cdo_clim(nc_var=nc_var,
-                                     year_start=year_start,year_stop=year_stop,
-                                     product=product,experiment=experiment,mmb=mmb,
-                                     inpath=dkrzpath,outpath=workpath)
-                        ## Calculate anomaly (if not yet)
-                        if not os.path.exists(f'{workpath}{nc_var}_dailyanom_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc'):    
-                            cdo_anom(nc_var,y,product,experiment,mmb,inpath,outpath)
+        
+        
+        
+        
+                    ## If daily anomalies are not available, get them
+                    if not os.path.exists(f'{workdir}{nc_var}_dailyanom_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc'):
+                        get_anom_w_cdo(nc_var, y, kind, year_start, year_stop, aggr_operator, tres, product,experiment,mmb, mmbpath, workpath) 
                     
                     anom_xr = xr.open_dataset(f'{modeldir}/{datasetname}_{var}_dailyanom_{y}_cropped.nc')
                     anom_xr = anom_xr.convert_calendar('gregorian')
@@ -440,6 +559,7 @@ def map_Ortographic (xrdf, targetdate_ts, lag, drivers_row, vmin='drivers', vmax
 
 def mask_xr_w_df (var, xrdf, submask, lsm, kind):
 
+    
     ## Generate coordinates of all gridpoints around the 2x2
     exp_list = [expand_res_grid(row) for index,row in submask.iterrows()] 
     ## Concatenate dataframes with all the new gridpoints
@@ -448,19 +568,14 @@ def mask_xr_w_df (var, xrdf, submask, lsm, kind):
     ## Append the new gridpoints to the original 2x2 mask
     submask_exp = pd.concat([submask,exp_df],ignore_index=True).drop_duplicates().reset_index(drop=True)
 
-    mask = submask_exp.assign(flag=1).set_index(["nodes_lon", "nodes_lat"]).flag.to_xarray().fillna(0).rename({"nodes_lon": "longitude", "nodes_lat": "latitude"})
+    mask = submask_exp.assign(flag=1).set_index(["nodes_lon", "nodes_lat"]).flag.to_xarray().fillna(0).rename({"nodes_lon": 'lon', "nodes_lat": 'lat'})
 
-    if (kind == 'hist'):
-        lonfield = 'lon'
-        latfield = 'lat'
-    else:
-        lonfield = 'longitude'
-        latfield = 'latitude'
+
     
-    #mask = mask.reindex(longitude=xrdf[lonfield], 
-    #                    latitude=xrdf[latfield],method="nearest", tolerance=1e-9, fill_value=0)
-    mask1 = mask.interp(longitude=xrdf[lonfield], 
-                        latitude=xrdf[latfield], 
+    #mask = mask.reindex(longitude=xrdf['lon'], 
+    #                    latitude=xrdf['lat'],method="nearest", tolerance=1e-9, fill_value=0)
+    mask1 = mask.interp(lon=xrdf['lon'], 
+                        lat=xrdf['lat'], 
                         method="nearest")
     mask1 = mask1.fillna(0)
     sub_xrdf = xrdf.where(mask1)
