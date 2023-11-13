@@ -12,6 +12,7 @@ import cartopy
 import matplotlib.ticker as mticker
 import glob
 import os
+import sys
 
 
 def add_driver_row (drivers_old, drivers_input, drivers_tmpl, var_specs, workmetadir):
@@ -29,7 +30,8 @@ def add_driver_row (drivers_old, drivers_input, drivers_tmpl, var_specs, workmet
             drivers_addrow[clm] = drivers_input[clm]
             
         var_row = var_specs.loc[var_specs['var'] == drivers_input['var'][0]]
-        drivers_addrow['era5_var'] = var_row['era5_var']
+        drivers_addrow['era5cmor_var'] = var_row['era5cmor_var']
+        drivers_addrow['era5cds_var'] = var_row['era5cds_var']
         drivers_addrow['cmip6_var'] = var_row['cmip6_var']
         drivers_addrow['vmin'] = -20
         drivers_addrow['vmax'] = 20
@@ -38,28 +40,32 @@ def add_driver_row (drivers_old, drivers_input, drivers_tmpl, var_specs, workmet
                 
         
         if drivers_addrow['var'][0] == 'mslp':
-            drivers_addrow['era5_var'] = 'msl'
+            drivers_addrow['era5cds_var'] = 'msl'
+            drivers_addrow['era5cmor_var'] = 'pls'
             drivers_addrow['cmip6_var'] = 'pls'
             drivers_addrow['vmin'] = -20
             drivers_addrow['vmax'] = 20
             var4path='msl'
 
         if drivers_addrow['var'][0] == 'tmax':
-            drivers_addrow['era5_var'] = 't2m'
+            drivers_addrow['era5cds_var'] = 't2m'
+            drivers_addrow['era5cmor_var'] = 'tasmax'
             drivers_addrow['cmip6_var'] = 'tasmax'
             drivers_addrow['vmin'] = -10
             drivers_addrow['vmax'] = 10
             var4path='t2m'
             
         if drivers_addrow['var'][0] == 'sm':
-            drivers_addrow['era5_var'] = 'swvl1'
+            drivers_addrow['era5cds_var'] = 'swvl1'
+            drivers_addrow['era5cmor_var'] = 'swvl1'
             drivers_addrow['cmip6_var'] = 'mrsos'
             drivers_addrow['vmin'] = -0.2
             drivers_addrow['vmax'] = 0.2
             var4path='sm1'
         
         if drivers_addrow['var'][0] == 'sic':
-            drivers_addrow['era5_var'] = 'sic'
+            drivers_addrow['era5cds_var'] = 'sic'
+            drivers_addrow['era5cmor_var'] = 'sic'
             drivers_addrow['cmip6_var'] = 'sic'
             drivers_addrow['vmin'] = np.nan
             drivers_addrow['vmax'] = np.nan
@@ -181,7 +187,7 @@ def daily_series_w_lags(xrdf, drivers_row, targetdate_ts, what, kind, plotdir):
     plt.axvline(x = mintime_ts, color = 'b', label = 'axvline - full height')
     plt.axvline(x = maxtime_ts, color = 'b', label = 'axvline - full height')
     plt.grid()
-    plt.savefig(f"{plotdir}CLINT050_{y}{m}{d}case_{var}_{cl_name}_{what}.png", facecolor='w')
+    #plt.savefig(f"{plotdir}CLINT050_{y}{m}{d}case_{var}_{cl_name}_{what}.png", facecolor='w')
     plt.show()
 
 def calc_clim (var,tres,product,experiment,ensemble,year_start,year_stop,path):
@@ -272,7 +278,7 @@ def cdo_clim(nc_var,year_start,year_stop,product,experiment,mmb,inpath,outpath):
     os.system(f'cdo -b 32 -ydrunmean,31 -cat "{infiles}" "{outfile}"')
     os.system(f'rm {outpath}temp_*.nc')
 
-def cdo_daily_aggr(nc_var,y,aggr_operator,product,experiment,mmb,inpath,outpath): 
+def cdo_daily_aggr(nc_var,y,aggr_operator,tres_filename,product,experiment,mmb,inpath,outpath): 
     
     """
     Call CDO to calculate climatology
@@ -305,7 +311,7 @@ def cdo_daily_aggr(nc_var,y,aggr_operator,product,experiment,mmb,inpath,outpath)
     
     """
     print(f'Producing file with daily data for {nc_var}, year {y}')
-    infiles = f'{inpath}{nc_var}_1hr_{product}_{experiment}_r{mmb}i1p1_{y}*-{y}*.nc'
+    infiles = f'{inpath}{nc_var}_{tres_filename}_{product}_{experiment}_r{mmb}i1p1_{y}*-{y}*.nc'
     outfile = f'{outpath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc'
     os.system(f'cdo day{aggr_operator} -mergetime {infiles} {outfile}')
     
@@ -347,7 +353,7 @@ def get_anom_w_cdo(nc_var, y, kind, year_start, year_stop, aggr_operator, tres, 
     aggr_operator: str
         which operator apply to hourly values to get daily values (e.g. 'mean','max')
     tres: str
-        time resolution of the input files (e.g. 'day','1hr')
+        time resolution of the input files (e.g. 'day','1hr','1hr-cf')
     product: str
         name of the product (e.g. 'reanalysis')
     experiment: str
@@ -367,20 +373,27 @@ def get_anom_w_cdo(nc_var, y, kind, year_start, year_stop, aggr_operator, tres, 
 
     endmonth = get_endmonth(y) #obtain the last of day of each month for this year
     ## If daily values are not available on DKRZ - Levante, get them
-    if tres == '1hr':
+    tres_filename = tres
+    
+    if (tres == '1hr'):
         dailypath = workpath
+        if (nc_var == 'swvl1'):
+            tres_filename = '1hr-cf'
         ## If daily values haven't been calculated yet
         if not (os.path.exists(f'{workpath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc')):
             ## Check if we have all the hourly files for all months of that year
-            monthly_files_exist = [os.path.exists(f'{mmbpath}{nc_var}_{tres}_{product}_{experiment}_r{mmb}i1p1_{y}{str(m).zfill(2)}01-{y}{str(m).zfill(2)}{endmonth[m-1]}.nc') for m in range(1,13)]
+            monthly_files_exist = [os.path.exists(f'{mmbpath}{nc_var}_{tres_filename}_{product}_{experiment}_r{mmb}i1p1_{y}{str(m).zfill(2)}01-{y}{str(m).zfill(2)}{endmonth[m-1]}.nc') for m in range(1,13)]
             if sum(monthly_files_exist)==12:
                 
-                cdo_daily_aggr(nc_var,y,aggr_operator,product,experiment,mmb,mmbpath,workpath)
-            elif not os.path.exists(f'{workdir}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231_cropped.nc'):
+                cdo_daily_aggr(nc_var,y,aggr_operator,tres_filename,product,experiment,mmb,mmbpath,workpath)
+            elif not os.path.exists(f'{workpath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231_cropped.nc'):
                 print(kind)
-                print(var)
-                print(year)
+                print(nc_var)
+                print(y)
                 print('Hourly data not available on DKRZ-Levente. Import data from JUNO/ZEUS')  
+                print("Here below the files that couldn't be found")
+                print(f'{mmbpath}{nc_var}_{tres}_{product}_{experiment}_r{mmb}i1p1_{y}1201-{y}12{endmonth[11]}.nc')
+                print(f'{workpath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231_cropped.nc')
                 sys.exit()
 
     if tres == 'day':
@@ -388,9 +401,11 @@ def get_anom_w_cdo(nc_var, y, kind, year_start, year_stop, aggr_operator, tres, 
         #If there's no yearly file with daily data
         if not os.path.exists(f'{mmbpath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc'):
                 print(kind)
-                print(var)
-                print(year)
+                print(nc_var)
+                print(y)
                 print('Daily data not available on DKRZ-Levente. Import data from JUNO/ZEUS')  
+                print("Here below the files that couldn't be found")
+                print(f'{mmbpath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc')
                 sys.exit()
 
 
@@ -399,11 +414,11 @@ def get_anom_w_cdo(nc_var, y, kind, year_start, year_stop, aggr_operator, tres, 
         yearly_files_exist = [os.path.exists(f'{dailypath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc') for y in range(year_start,year_stop+1)]
         ## Are there all the needed 30 files?
         if sum(yearly_files_exist)!=30:
-            print(f'{nc_var}, some missing files of daily data between {year_start} and {year_stop}')
+            print(f'{nc_var}, some missing files of daily data between {year_start} and {year_stop}, retrieving them')
             for y in range(year_start,year_stop+1):
                 ## Is there a yearly file with daily data?
                 if not os.path.exists(f'{workpath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc'):
-                    cdo_daily_aggr(nc_var,y,aggr_operator,product,experiment,mmb,mmbpath,workpath)
+                    cdo_daily_aggr(nc_var,y,aggr_operator,tres_filename,product,experiment,mmb,mmbpath,workpath)
                 else:
                     print(f'Daily netcdf for {nc_var} about year {y} already exists')
         cdo_clim(nc_var=nc_var,
@@ -423,7 +438,7 @@ def get_endmonth(y):
 
     
     
-def loop_map_grids(drivers, dates_ts, variables, lsm, modelspecs1, varspecs, machine, modeldir, maskdir, plotdir):
+def loop_map_grids(drivers, dates_ts, variables, lsm, modelspecs1, varspecs, machine, workdir, modeldir, maskdir, plotdir):
     
     for date_ts in dates_ts:
         y = date_ts.year
@@ -433,16 +448,19 @@ def loop_map_grids(drivers, dates_ts, variables, lsm, modelspecs1, varspecs, mac
         for var in variables:
             varrow = varspecs.loc[varspecs['var'] == var]
             drivers_sub = drivers.loc[drivers['var'] == var]
-
+            #print(varrow)
             if kind == 'ERA5':
                 #datasetnames = ['era5']
-                kind_var = 'era5_var'
+                if machine == 'DKRZ':
+                    kind_var = 'era5cmor_var'
+                else:
+                    kind_var = 'era5cds_var'
                 kind_aggr = 'era5_aggr'
                 #if machine == 'DKRZ':
                 #    datapaths = sum([[f"{modeldir1}{varrow[kind_aggr][0]}/atmos/{nc_var}/r{mmb}i1p1/" for mmb in modelrow["members_list"]] for i, modelrow in modelspecs1.iterrows()],[])
                 experiment = 'era5'
                 product = 'reanalysis'
-                tres = varrow['era5_aggr'][0]
+                tres = varrow['era5_aggr'].values[0]
                 year_start = 1981
                 year_stop = 2010
 
@@ -452,42 +470,67 @@ def loop_map_grids(drivers, dates_ts, variables, lsm, modelspecs1, varspecs, mac
                 kind_var = 'cmip6_var'
                 kind_aggr = 'cmip6_aggr'
 
-            if machine == 'DKRZ':
-                kind_var = 'cmip6_var'
-
+            #print(kind_var)
+            #print(varrow)
             nc_var = varrow[kind_var].values[0]
             aggr_operator = varrow['aggr_operator'].values[0]
+
             
-            models = modelspecs1['model_names'].to_list()
+            models = modelspecs1.loc[modelspecs1.kind == kind,'model_names'].to_list()
+            #print(models)
             for mdl in models:
+                #print(mdl)
                 mdl = models[0]
                 modelpath = modelspecs1.loc[modelspecs1['model_names']==mdl,'model_path'].values[0]
                 workpath = modelspecs1.loc[modelspecs1['model_names']==mdl,'work_path'].values[0]
                 members = modelspecs1.loc[modelspecs1['model_names']==mdl,'members_list'].values[0]
                 
                 for mmb in members:
-    
-                    dkrzpath = f"{modelpath}{varrow[kind_aggr].values[0]}/atmos/{nc_var}/r{mmb}i1p1/"
-        
+
+                    mmbpath = f"{modelpath}{tres}/{varrow['where'].values[0]}/{nc_var}/r{mmb}i1p1/"
+
         
         
         
                     ## If daily anomalies are not available, get them
-                    if not os.path.exists(f'{workdir}{nc_var}_dailyanom_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc'):
+                    if not os.path.exists(f'{workpath}{nc_var}_dailyanom_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc'):
                         get_anom_w_cdo(nc_var, y, kind, year_start, year_stop, aggr_operator, tres, product,experiment,mmb, mmbpath, workpath) 
-                    
-                    anom_xr = xr.open_dataset(f'{modeldir}/{datasetname}_{var}_dailyanom_{y}_cropped.nc')
-                    anom_xr = anom_xr.convert_calendar('gregorian')
+
+                    anom_xr = xr.open_dataset(f'{workpath}/{nc_var}_dailyanom_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc')
+                    anom_xr = anom_xr.convert_calendar('gregorian') #convert to gregorian calendar
+                    #anom_xr['time'] = anom_xr.indexes['time'].normalize() #drop hour from time axis
+
+                    if np.max(anom_xr.lon)>180:
+                        anom_xr = rearrange_lon (anom_xr)
+
+                    dims = list(anom_xr.dims)
+
+                    if (('longitude' in dims) | ('latitude' in dims)):
+                        infile = f'{workpath}/{nc_var}_dailyanom_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc'
+                        outfile = f'{workpath}/{nc_var}_dailyanom_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc'
+                        command = f'cdo chname,longitude,lon {infile} {outfile}'
+
+                        infile = f'{workpath}/{nc_var}_dailyanom_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc'
+                        outfile  = f'{workpath}/{nc_var}_dailyanom_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc'
+                        command = f'cdo chname,latitude,lat {infile} {outfile}'
+
+                        anom_xr = xr.open_dataset(f'{workpath}/{nc_var}_dailyanom_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc')
+                        anom_xr = anom_xr.convert_calendar('gregorian')
+
+                        if np.max(anom_xr.lon)>180:
+                            anom_xr = clint.rearrange_lon (anom_xr)  
+                            
                     if var == 'mslp':
                         anom_xr[nc_var] = anom_xr[nc_var]/100
+                        
                     for index, drivers_row in drivers_sub.iterrows():
-                        mask_df = pd.read_csv(f"{drivers_row['clmask_file']}",index_col=[0])
+                        mask_df = pd.read_csv(f"{maskdir}{drivers_row['clmask_path']}{drivers_row['clmask_file']}",index_col=[0])
                         cl_nr = drivers_row['cl_nr']
                         submask = mask_df[mask_df.cluster == cl_nr-1] #python indexing, cluster 1 is nr0 in the mask file...
                         maskedanom = mask_xr_w_df(var, anom_xr, submask, lsm, kind)
-
+                        
                         multimaps_lag (xrdf = maskedanom, targetdate_ts = date_ts, 
-                                            drivers_row = drivers_row, kind=kind, plotdir = plotdir,
+                                            drivers_row = drivers_row, kind=kind, machine=machine, plotdir = plotdir,
                                             proj = 'Ortographic', 
                                             vmin='drivers', vmax='drivers')
                         daily_series_w_lags(maskedanom, drivers_row, date_ts, 'average', kind, plotdir)
@@ -500,7 +543,7 @@ def map_EuroPP (xrdf, targetdate_ts, lag, drivers_row, vmin, vmax):
     
     targetdate_str = dt.strftime(targetdate_ts,'%Y-%m-%d')
 
-    nc_var = drivers_row.era5_var
+    nc_var = drivers_row.era5cds_var
     plotdate_ts = targetdate_ts - pd.DateOffset(days = lag) + pd.DateOffset(hours = 12)
     sub1d = xrdf.sel(time=plotdate_ts)
     
@@ -533,7 +576,7 @@ def map_Ortographic (xrdf, targetdate_ts, lag, drivers_row, vmin='drivers', vmax
         vmax = drivers_row['vmax']
     targetdate_str = dt.strftime(targetdate_ts,'%Y-%m-%d')
     var = drivers_row['var']
-    nc_var = drivers_row.era5_var
+    nc_var = drivers_row.era5cds_var
     plotdate_ts = targetdate_ts - pd.DateOffset(days = lag)# + pd.DateOffset(hours = 12)
     sub1d = xrdf.sel(time=plotdate_ts)
     plt.figure(figsize=(fig_width, fig_height))
@@ -586,8 +629,10 @@ def mask_xr_w_df (var, xrdf, submask, lsm, kind):
     return(sub_xrdf)
 
    
-def multimaps_lag (xrdf, targetdate_ts, drivers_row, kind, plotdir,
-                   proj='Ortographic', vmin='drivers', vmax='drivers'):
+def multimaps_lag (xrdf, targetdate_ts, drivers_row, kind, machine, plotdir,
+                   proj='Ortographic', vmin='drivers', vmax='drivers',):
+    
+    
     
     var = drivers_row['var']
     cl_name = drivers_row['cl_name']
@@ -608,10 +653,15 @@ def multimaps_lag (xrdf, targetdate_ts, drivers_row, kind, plotdir,
         var = drivers_row['var']
         
     if kind == 'ERA5':
-        nc_var = drivers_row.era5_var
+        if machine == 'DKRZ':
+            nc_var = drivers_row.era5cmor_var
+        else:
+            nc_var = drivers_row.era5
     elif kind == 'hist':
         nc_var = drivers_row.cmip6_var
 
+
+    
     if var == 'tmax':
         palette = plt.cm.RdBu_r
     if var == 'mslp':
@@ -619,7 +669,7 @@ def multimaps_lag (xrdf, targetdate_ts, drivers_row, kind, plotdir,
     if var == 'sm':
         palette = plt.cm.BrBG
         
-    #print(f"KIND IS {drivers_row[['var','era5_var','cmip6_var']]}")
+    
     
     ## DEFINE PROJECTION AND MAP EXTENT
         
@@ -692,8 +742,8 @@ def multimaps_lag (xrdf, targetdate_ts, drivers_row, kind, plotdir,
     maxtime_str = dt.strftime(mintime_ts,'%Y-%m-%d')
     
     targetdate_str = dt.strftime(targetdate_ts,'%Y-%m-%d')
-
-
+    h_offset = pd.to_datetime(xrdf.isel(time=0)['time'].values).hour #what is the hour of data in the netcdf
+    m_offset = pd.to_datetime(xrdf.isel(time=0)['time'].values).minute #what is the hour of data in the netcdf
     
 
     fig, axs = plt.subplots(int(numfigs_v), int(numfigs_h),
@@ -709,8 +759,8 @@ def multimaps_lag (xrdf, targetdate_ts, drivers_row, kind, plotdir,
     for f,lag in enumerate(range(minlag,maxlag+1)):
 
         
-
-        plotdate_ts = targetdate_ts - pd.DateOffset(days = lag)# + pd.DateOffset(hours = 12)
+        
+        plotdate_ts = targetdate_ts - pd.DateOffset(days = lag) + pd.DateOffset(hours = h_offset) + pd.DateOffset(minutes = m_offset)
         #print(plotdate_ts)
         sub1d = xrdf.sel(time=plotdate_ts)
         axs[f].remove()
@@ -725,31 +775,38 @@ def multimaps_lag (xrdf, targetdate_ts, drivers_row, kind, plotdir,
         
         
         
-        
-        geo_axes.scatter(x=drivers_row['cl_centroid_lon'], y=drivers_row['cl_centroid_lat'],
-                    marker='X',color='black',s=900,transform=ccrs.PlateCarree(),alpha=1)
+        if (not np.isnan(drivers_row['cl_centroid_lon'])):
+            geo_axes.scatter(x=drivers_row['cl_centroid_lon'], y=drivers_row['cl_centroid_lat'],
+                        marker='X',color='black',s=900,transform=ccrs.PlateCarree(),alpha=1)
         geo_axes.coastlines()
+        
         geo_axes.add_feature(cartopy.feature.BORDERS, linestyle='-', alpha=.5)
         #geo_axes.text(x=text_plot_lon, y=text_plot_lat, 
         #              s=f'-{lag}d', transform=ccrs.PlateCarree(), fontsize=70)
         geo_axes.text(x=0.875, y=0.9, horizontalalignment='center', verticalalignment='center',
                       s=f'-{lag}d', transform=geo_axes.transAxes, fontsize=70)
-        geo_axes.set_extent([xmin,xmax,ymin,ymax], crs=my_projn) # data/projection coordinates  
+        geo_axes.set_extent([xmin,xmax,ymin,ymax], crs=my_projn) # data/projection coordinates 
+        #print(f'before this, {f}')
+        
         gl = geo_axes.gridlines(lonlatproj,linewidth=2, color='lightgray', alpha=0.5)
         gl.xlocator = mticker.FixedLocator(np.arange(-180, 180, 5))
         gl.ylocator = mticker.FixedLocator(np.arange(-90, 90, 5))
+        
+        
         plt.title(None)
+        
         #plt.title(f'-{lag}d', fontsize = 50)
         #geo_axes._legend.remove()
     #handles, labels = geo_axes.get_legend_handles_labels()
     #fig.legend(handles, labels, loc='upper center')
+    
     for f in range(numfigs,int(numfigs_h*numfigs_v)):
         #print(f)
         fig.delaxes(axs[int(f)])  
 
     fig.subplots_adjust(bottom=0.04+1/(numfigs_v*ax_height), top=0.94, left=0.1, right=0.9,
                         wspace=0.02, hspace=0.02)
-
+    
     cbar_ax = fig.add_axes([0.07, 0.03, 0.86,1/(numfigs_v*ax_height)])
 
     cbar=fig.colorbar(cs, cax=cbar_ax, orientation='horizontal')

@@ -1,4 +1,4 @@
-var,unit,era5_var,cmip6_var,var4path,era5_aggr,aggr_operator,vmin,vmax
-tmax,°C,mx2t,tasmax,mx2t,day,max,-10.0,10.0
-mslp,hPa,msl,psl,msl,1hr,mean,-20.0,20.0
-sm,m^3/m^3,swvl1,mrsos,sm1,,mean,-0.2,0.2
+var,unit,where,era5cds_var,era5cmor_var,cmip6_var,var4path,era5_aggr,aggr_operator,vmin,vmax
+tmax,°C,atmos,mx2t,tasmax,tasmax,mx2t,day,max,-10.0,10.0
+mslp,hPa,atmos,msl,psl,psl,msl,1hr,mean,-20.0,20.0
+sm,m^3/m^3,land,swvl1,swvl1,mrsos,sm1,1hr,mean,-0.2,0.2
