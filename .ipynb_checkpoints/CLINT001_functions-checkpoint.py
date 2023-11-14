@@ -8,14 +8,14 @@ from datetime import datetime as dt
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import cartopy.crs as ccrs
-import cartopy
+import cartopy 
 import matplotlib.ticker as mticker
 import glob
 import os
 import sys
 
 
-def add_driver_row (drivers_old, drivers_input, drivers_tmpl, var_specs, workmetadir):
+def add_driver_row (drivers_old, drivers_input, drivers_tmpl, var_specs, maskdir, workmetadir):
 
     if ((drivers_old.loc[(drivers_old['var']==drivers_input['var'][0]) &
                     (drivers_old['domain']==drivers_input['domain'][0]) &
@@ -27,41 +27,36 @@ def add_driver_row (drivers_old, drivers_input, drivers_tmpl, var_specs, workmet
 
         for clm in drivers_input.columns:
             #print(clm)
-            drivers_addrow[clm] = drivers_input[clm]
+            drivers_addrow[clm] = drivers_input[clm].values[0]
             
-        var_row = var_specs.loc[var_specs['var'] == drivers_input['var'][0]]
-        drivers_addrow['era5cmor_var'] = var_row['era5cmor_var']
-        drivers_addrow['era5cds_var'] = var_row['era5cds_var']
-        drivers_addrow['cmip6_var'] = var_row['cmip6_var']
-        drivers_addrow['vmin'] = -20
-        drivers_addrow['vmax'] = 20
-        var4path='msl'
-
-                
+        var_row = var_specs.loc[var_specs['var'] == drivers_input['var'].values[0]]
+        for clm in var_row.columns:
+            drivers_addrow[clm] = var_row[clm].values[0]
+            
+        
+        #drivers_addrow['era5cmor_var'] = var_row['era5cmor_var'].values[0]
+        #drivers_addrow['era5cds_var'] = var_row['era5cds_var'].values[0]
+        #drivers_addrow['cmip6_var'] = var_row['cmip6_var'].values[0]
+        #drivers_addrow['var4path'] = var_row['var4path'].values[0]
+        var4path = var_row['var4path'].values[0]
+        #print(var_row)
+        #print(drivers_addrow)  
         
         if drivers_addrow['var'][0] == 'mslp':
-            drivers_addrow['era5cds_var'] = 'msl'
-            drivers_addrow['era5cmor_var'] = 'pls'
-            drivers_addrow['cmip6_var'] = 'pls'
             drivers_addrow['vmin'] = -20
             drivers_addrow['vmax'] = 20
-            var4path='msl'
 
         if drivers_addrow['var'][0] == 'tmax':
-            drivers_addrow['era5cds_var'] = 't2m'
-            drivers_addrow['era5cmor_var'] = 'tasmax'
-            drivers_addrow['cmip6_var'] = 'tasmax'
+
             drivers_addrow['vmin'] = -10
             drivers_addrow['vmax'] = 10
-            var4path='t2m'
+
             
         if drivers_addrow['var'][0] == 'sm':
-            drivers_addrow['era5cds_var'] = 'swvl1'
-            drivers_addrow['era5cmor_var'] = 'swvl1'
-            drivers_addrow['cmip6_var'] = 'mrsos'
+
             drivers_addrow['vmin'] = -0.2
             drivers_addrow['vmax'] = 0.2
-            var4path='sm1'
+
         
         if drivers_addrow['var'][0] == 'sic':
             drivers_addrow['era5cds_var'] = 'sic'
@@ -78,12 +73,19 @@ def add_driver_row (drivers_old, drivers_input, drivers_tmpl, var_specs, workmet
         if drivers_addrow['exp_size'][0] == 'high':
             tot_num_cl = 20
 
-        #/data/csp/as18623/CLINT_metadata/Masks/Test5low_Clusters
-        drivers_addrow['clmask_path'] = f"Test{drivers_addrow['exp'][0]}{drivers_addrow['exp_size'][0]}_Clusters/"
-        maskfile = glob.glob(f"labels??{var4path}{drivers_addrow['domain'][0]}{tot_num_cl}.csv")[0]
-        drivers_addrow['clmask_file'] = maskfile 
+        #print(drivers_addrow)
+        #print(drivers_addrow['domain'].values[0])
+        
+        
+        drivers_addrow['cl_name'] = f"cl{drivers_addrow['exp'].values[0]}{drivers_addrow['exp_size'].values[0]}_{drivers_addrow['domain'].values[0]}{drivers_addrow['cl_nr'].values[0]}_{drivers_addrow['var'].values[0]}"
+        drivers_addrow['clmask_path'] = f"Test{drivers_addrow['exp'].values[0]}{drivers_addrow['exp_size'][0]}_Clusters/"
+
+        #print(f"{maskdir}labels??{var4path}{drivers_addrow['domain'].values[0]}{tot_num_cl}.csv")
+        maskfile = glob.glob(f"{maskdir}labels??{var4path}{drivers_addrow['domain'].values[0]}{tot_num_cl}.csv")[0]
+        #print(maskfile)
+        drivers_addrow['clmask_file'] = maskfile.split('/')[-1]
         mask = pd.read_csv(maskfile,index_col=[0])
-        sub_mask = mask.loc[mask.cluster == drivers_addrow['cl_nr'][0]-1]
+        sub_mask = mask.loc[mask.cluster == drivers_addrow['cl_nr'].values[0]-1]
 
         ## determine latlon box for graphical needs
 
@@ -126,7 +128,7 @@ def apply_land_sea_mask(targetxr, lsm, kind):
     outputxr = targetxr.where(lsm_mask['lsm'])
     return(outputxr)
 
-def daily_series_w_lags(xrdf, drivers_row, targetdate_ts, what, kind, plotdir):
+def daily_series_w_lags(xrdf, nc_var, drivers_row, targetdate_ts, what, kind, plotdir):
 
     y = targetdate_ts.year
     m = str(targetdate_ts.month).zfill(2)
@@ -134,9 +136,6 @@ def daily_series_w_lags(xrdf, drivers_row, targetdate_ts, what, kind, plotdir):
     
     vmin = drivers_row['vmin']
     vmax = drivers_row['vmax']
-    
-    
-    nc_var = drivers_row.cmip6_var
 
     
     
@@ -171,22 +170,25 @@ def daily_series_w_lags(xrdf, drivers_row, targetdate_ts, what, kind, plotdir):
     #plt.figure(figsize=((16,8)))
     fig,ax = plt.subplots()
     if what == 'centroid':
-        cc_ser[nc_var].plot(color='red')
+        cc_ser[nc_var].plot(color='red',label='centroid')
     if what == 'average':
-        cc_ser[nc_var].plot(color='sienna')
+        cc_ser[nc_var].plot(color='sienna',label='cluster avg')
     if what == 'quantiles':
-        ax.fill_between(x=cc_ser10['time'],y1=cc_ser10[nc_var],y2=cc_ser90[nc_var],color='mistyrose')
-        ax.fill_between(x=cc_ser25['time'],y1=cc_ser25[nc_var],y2=cc_ser75[nc_var],color='pink')
-        cc_ser50[nc_var].plot(color='mediumvioletred')
+        ax.fill_between(x=cc_ser10['time'],y1=cc_ser10[nc_var],y2=cc_ser90[nc_var],color='mistyrose',label='10th to 90th perc.')
+        ax.fill_between(x=cc_ser25['time'],y1=cc_ser25[nc_var],y2=cc_ser75[nc_var],color='pink',label='25th to 75th perc.')
+        cc_ser50[nc_var].plot(color='mediumvioletred',label='cluster median')
+      
+                                
 
         
     ax.set_ylim(vmin,vmax)   
     plt.title(f'{var} daily series ({y}), cluster {cl_name} {what}',fontsize=30)
     plt.axhline(y=0, color='k')
-    plt.axvline(x = targetdate_ts, color = 'k', label = 'axvline - full height')
-    plt.axvline(x = mintime_ts, color = 'b', label = 'axvline - full height')
-    plt.axvline(x = maxtime_ts, color = 'b', label = 'axvline - full height')
+    lineminlag = plt.axvline(x = mintime_ts, color = 'b', label='cluster dates range')
+    linemaxlag = plt.axvline(x = maxtime_ts, color = 'b')
+    lineevent = plt.axvline(x = targetdate_ts,color = 'k',lw=3,label='event',linestyle='dotted')
     plt.grid()
+    plt.legend()
     #plt.savefig(f"{plotdir}CLINT050_{y}{m}{d}case_{var}_{cl_name}_{what}.png", facecolor='w')
     plt.show()
 
@@ -332,7 +334,7 @@ def expand_res_grid(submask_row,old_res=0.5,new_res=0.25):
     add_df.columns = ['nodes_lat','nodes_lon']
     return (add_df)
 
-def get_anom_w_cdo(nc_var, y, kind, year_start, year_stop, aggr_operator, tres, product,experiment,mmb, mmbpath, workpath):
+def get_anom_w_cdo(nc_var, year, kind, year_start, year_stop, aggr_operator, tres, product,experiment,mmb, mmbpath, workpath):
     """
     Get yearly files with daily anomalies, when not available
     
@@ -342,7 +344,7 @@ def get_anom_w_cdo(nc_var, y, kind, year_start, year_stop, aggr_operator, tres, 
     ----------
     nc_var: str
         variable name, as it appears in the name of the file and in the path
-    y: int
+    year: int
         year (e.g. 1981)
     kind: str
         'era5' or 'cmip6'
@@ -371,7 +373,7 @@ def get_anom_w_cdo(nc_var, y, kind, year_start, year_stop, aggr_operator, tres, 
     
     """
 
-    endmonth = get_endmonth(y) #obtain the last of day of each month for this year
+    endmonth = get_endmonth(year) #obtain the last of day of each month for this year
     ## If daily values are not available on DKRZ - Levante, get them
     tres_filename = tres
     
@@ -380,32 +382,32 @@ def get_anom_w_cdo(nc_var, y, kind, year_start, year_stop, aggr_operator, tres, 
         if (nc_var == 'swvl1'):
             tres_filename = '1hr-cf'
         ## If daily values haven't been calculated yet
-        if not (os.path.exists(f'{workpath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc')):
+        if not (os.path.exists(f'{workpath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{year}0101-{year}1231.nc')):
             ## Check if we have all the hourly files for all months of that year
-            monthly_files_exist = [os.path.exists(f'{mmbpath}{nc_var}_{tres_filename}_{product}_{experiment}_r{mmb}i1p1_{y}{str(m).zfill(2)}01-{y}{str(m).zfill(2)}{endmonth[m-1]}.nc') for m in range(1,13)]
+            monthly_files_exist = [os.path.exists(f'{mmbpath}{nc_var}_{tres_filename}_{product}_{experiment}_r{mmb}i1p1_{year}{str(m).zfill(2)}01-{year}{str(m).zfill(2)}{endmonth[m-1]}.nc') for m in range(1,13)]
             if sum(monthly_files_exist)==12:
                 
-                cdo_daily_aggr(nc_var,y,aggr_operator,tres_filename,product,experiment,mmb,mmbpath,workpath)
-            elif not os.path.exists(f'{workpath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231_cropped.nc'):
+                cdo_daily_aggr(nc_var,year,aggr_operator,tres_filename,product,experiment,mmb,mmbpath,workpath)
+            elif not os.path.exists(f'{workpath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{year}0101-{year}1231_cropped.nc'):
                 print(kind)
                 print(nc_var)
                 print(y)
                 print('Hourly data not available on DKRZ-Levente. Import data from JUNO/ZEUS')  
                 print("Here below the files that couldn't be found")
-                print(f'{mmbpath}{nc_var}_{tres}_{product}_{experiment}_r{mmb}i1p1_{y}1201-{y}12{endmonth[11]}.nc')
-                print(f'{workpath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231_cropped.nc')
+                print(f'{mmbpath}{nc_var}_{tres}_{product}_{experiment}_r{mmb}i1p1_{year}1201-{year}12{endmonth[11]}.nc')
+                print(f'{workpath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{year}0101-{year}1231_cropped.nc')
                 sys.exit()
 
     if tres == 'day':
         dailypath = mmbpath
         #If there's no yearly file with daily data
-        if not os.path.exists(f'{mmbpath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc'):
+        if not os.path.exists(f'{mmbpath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{year}0101-{year}1231.nc'):
                 print(kind)
                 print(nc_var)
-                print(y)
+                print(year)
                 print('Daily data not available on DKRZ-Levente. Import data from JUNO/ZEUS')  
                 print("Here below the files that couldn't be found")
-                print(f'{mmbpath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc')
+                print(f'{mmbpath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{year}0101-{year}1231.nc')
                 sys.exit()
 
 
@@ -425,7 +427,7 @@ def get_anom_w_cdo(nc_var, y, kind, year_start, year_stop, aggr_operator, tres, 
                  year_start=year_start,year_stop=year_stop,
                  product=product,experiment=experiment,mmb=mmb,
                  inpath=dailypath,outpath=workpath)    
-    cdo_anom(nc_var=nc_var,y=y,
+    cdo_anom(nc_var=nc_var,y=year,
              product=product,experiment=experiment,mmb=mmb,
              inpath=dailypath,outpath=workpath)
 
@@ -487,7 +489,7 @@ def loop_map_grids(drivers, dates_ts, variables, lsm, modelspecs1, varspecs, mac
                 
                 for mmb in members:
 
-                    mmbpath = f"{modelpath}{tres}/{varrow['where'].values[0]}/{nc_var}/r{mmb}i1p1/"
+                    mmbpath = f"{modelpath}{tres}/{varrow['realm'].values[0]}/{nc_var}/r{mmb}i1p1/"
 
         
         
@@ -533,8 +535,8 @@ def loop_map_grids(drivers, dates_ts, variables, lsm, modelspecs1, varspecs, mac
                                             drivers_row = drivers_row, kind=kind, machine=machine, plotdir = plotdir,
                                             proj = 'Ortographic', 
                                             vmin='drivers', vmax='drivers')
-                        daily_series_w_lags(maskedanom, drivers_row, date_ts, 'average', kind, plotdir)
-                        daily_series_w_lags(maskedanom, drivers_row, date_ts, 'quantiles', kind, plotdir)
+                        daily_series_w_lags(maskedanom, nc_var, drivers_row, date_ts, 'average', kind, plotdir)
+                        daily_series_w_lags(maskedanom, nc_var, drivers_row, date_ts, 'quantiles', kind, plotdir)
                         #daily_series_w_lags(maskedanom, drivers_row, date_ts, 'centroid', kind, plotdir)
 
                 
@@ -661,14 +663,7 @@ def multimaps_lag (xrdf, targetdate_ts, drivers_row, kind, machine, plotdir,
         nc_var = drivers_row.cmip6_var
 
 
-    
-    if var == 'tmax':
-        palette = plt.cm.RdBu_r
-    if var == 'mslp':
-        palette = plt.cm.PRGn_r
-    if var == 'sm':
-        palette = plt.cm.BrBG
-        
+    palette = palette_CLINT(var)       
     
     
     ## DEFINE PROJECTION AND MAP EXTENT
@@ -811,11 +806,55 @@ def multimaps_lag (xrdf, targetdate_ts, drivers_row, kind, machine, plotdir,
 
     cbar=fig.colorbar(cs, cax=cbar_ax, orientation='horizontal')
     cbar.set_label(f"[{drivers_row['unit']}]",fontsize=50)
+    tick_locator = mticker.MaxNLocator(nbins=11)
+    cbar.locator = tick_locator
+    cbar.update_ticks()
     cbar.ax.tick_params(labelsize=50)
     
 
     #plt.savefig(f"{plotdir}CLINT040_maps_{y}{m}{d}case_{var}_Test{drivers_row['exp']}{drivers_row['exp_size']}{cl_name}.png", facecolor='w')
+
+def palette_CLINT (var,n=20):
+    #print(f'palette: {var}')
+    if var == 'mslp':
+        print(var)
+        pltt = mpl.colors.LinearSegmentedColormap.from_list('Pressure', (
+    # Edit this gradient at https://eltos.github.io/gradient/#Pressure=0:4A0062-20:8E1CC4-40.1:CBADE1-50:FFF2C5-59.9:9BCF9F-80:38955C-100:004B32
+    (0.000, (0.290, 0.000, 0.384)),
+    (0.200, (0.557, 0.110, 0.769)),
+    (0.401, (0.796, 0.678, 0.882)),
+    (0.500, (1.000, 0.949, 0.773)),
+    (0.599, (0.608, 0.812, 0.624)),
+    (0.800, (0.220, 0.584, 0.361)),
+    (1.000, (0.000, 0.294, 0.196))), N=n)
+        
+    elif var == 'sm':
+        pltt = mpl.colors.LinearSegmentedColormap.from_list('SoilMoisture', (
+    # Edit this gradient at https://eltos.github.io/gradient/#SoilMoisture=0:44000D-24.9:D5572D-50:FFF3C8-75.1:42A36D-100:00343C
+    (0.000, (0.267, 0.000, 0.051)),
+    (0.249, (0.835, 0.341, 0.176)),
+    (0.500, (1.000, 0.953, 0.784)),
+    (0.751, (0.259, 0.639, 0.427)),
+    (1.000, (0.000, 0.204, 0.235))), N=n)
+        return(pltt)
     
+    elif var == 'tmax':
+        pltt = mpl.colors.LinearSegmentedColormap.from_list('Temperature', (
+    # Edit this gradient at https://eltos.github.io/gradient/#Temperature=0:0D0038-15.4:0C4AAA-35:89C0C5-50:FFF2C5-65:FFA88F-84.6:BA2628-100:61001A
+    (0.000, (0.051, 0.000, 0.220)),
+    (0.154, (0.047, 0.290, 0.667)),
+    (0.350, (0.537, 0.753, 0.773)),
+    (0.500, (1.000, 0.949, 0.773)),
+    (0.650, (1.000, 0.659, 0.561)),
+    (0.846, (0.729, 0.149, 0.157)),
+    (1.000, (0.380, 0.000, 0.102))), N=n)
+        
+    else:
+        print('This variable does not have a customized palette')
+        pltt = plt.cm.PuOr
+    return(pltt) 
+
+
 def rearrange_lon (xrdf):
     ## Rearrange longitude of xarray datasets where longitudes are in the [0,360) range
     ## Longitudes are translated to [-180,180)
