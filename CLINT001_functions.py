@@ -13,6 +13,7 @@ import matplotlib.ticker as mticker
 import glob
 import os
 import sys
+import math
 
 
 def add_driver_row (drivers_old, drivers_input, drivers_tmpl, var_specs, maskdir, workmetadir):
@@ -41,30 +42,6 @@ def add_driver_row (drivers_old, drivers_input, drivers_tmpl, var_specs, maskdir
         var4path = var_row['var4path'].values[0]
         #print(var_row)
         #print(drivers_addrow)  
-        
-        if drivers_addrow['var'][0] == 'mslp':
-            drivers_addrow['vmin'] = -20
-            drivers_addrow['vmax'] = 20
-
-        if drivers_addrow['var'][0] == 'tmax':
-
-            drivers_addrow['vmin'] = -10
-            drivers_addrow['vmax'] = 10
-
-            
-        if drivers_addrow['var'][0] == 'sm':
-
-            drivers_addrow['vmin'] = -0.2
-            drivers_addrow['vmax'] = 0.2
-
-        
-        if drivers_addrow['var'][0] == 'sic':
-            drivers_addrow['era5cds_var'] = 'sic'
-            drivers_addrow['era5cmor_var'] = 'sic'
-            drivers_addrow['cmip6_var'] = 'sic'
-            drivers_addrow['vmin'] = np.nan
-            drivers_addrow['vmax'] = np.nan
-            var4path='sm1'
 
         if drivers_addrow['exp_size'][0] == 'low':
             tot_num_cl = 5
@@ -88,13 +65,39 @@ def add_driver_row (drivers_old, drivers_input, drivers_tmpl, var_specs, maskdir
         sub_mask = mask.loc[mask.cluster == drivers_addrow['cl_nr'].values[0]-1]
 
         ## determine latlon box for graphical needs
-
+        
         drivers_addrow['cl_ext_S'] = np.min(sub_mask.nodes_lat) - 1
         drivers_addrow['cl_ext_N'] = np.max(sub_mask.nodes_lat) + 1
         drivers_addrow['cl_ext_W'] = np.min(sub_mask.nodes_lon) - 1
         drivers_addrow['cl_ext_E'] = np.max(sub_mask.nodes_lon) + 1    
         drivers_addrow['cl_ortho_lat'] = (np.min(sub_mask.nodes_lat)+np.max(sub_mask.nodes_lat))/2
         drivers_addrow['cl_ortho_lon'] = (np.min(sub_mask.nodes_lon)+np.max(sub_mask.nodes_lon))/2
+        
+        if ((drivers_addrow['cl_ext_W'].values[0] <= -179) &
+            (drivers_addrow['cl_ext_E'].values[0] >= 179)):
+            sub_mask['nodes_lon_360'] = ((sub_mask['nodes_lon'] + 360) % 360)
+            drivers_addrow['cl_ortho_lon'] = ((((np.min(sub_mask.nodes_lon_360)+np.max(sub_mask.nodes_lon_360))/2)+180)%360)-180
+            drivers_addrow['cl_ext_W'] = (((np.min(sub_mask.nodes_lon_360) - 1)+180)%360)-180 
+            drivers_addrow['cl_ext_E'] = (((np.max(sub_mask.nodes_lon_360) + 1)+180)%360)-180
+            
+        coord_ortho = midpoint_spherical_interpolation(drivers_addrow['cl_ext_E'].values[0], 
+                                               drivers_addrow['cl_ext_N'].values[0], 
+                                               drivers_addrow['cl_ext_W'].values[0],
+                                               drivers_addrow['cl_ext_S'].values[0])
+        drivers_addrow['cl_ortho_lat'] = coord_ortho[1]
+        
+        if (((drivers_addrow['cl_ext_E'].values[0]-drivers_addrow['cl_ext_W'].values[0])>120) &
+             (drivers_addrow['cl_ext_E'].values[0] > drivers_addrow['cl_ext_W'].values[0]) &
+             ((drivers_addrow['cl_ext_S'].values[0]>45) | 
+              (drivers_addrow['cl_ext_N'].values[0]<-45))):      
+                drivers_addrow['cl_ortho_lat'] = np.sign(drivers_addrow['cl_ortho_lat'])*89
+        if (((drivers_addrow['cl_ext_E'].values[0]+360-drivers_addrow['cl_ext_W'].values[0])>120) &
+             (drivers_addrow['cl_ext_W'].values[0] > drivers_addrow['cl_ext_E'].values[0]) &
+             ((drivers_addrow['cl_ext_S'].values[0]>45) | 
+              (drivers_addrow['cl_ext_N'].values[0]<-45))):        
+                drivers_addrow['cl_ortho_lat'] = np.sign(drivers_addrow['cl_ortho_lat'])*89
+        
+
 
         drivers_new = pd.concat([drivers_old,drivers_addrow])
         
@@ -128,16 +131,145 @@ def apply_land_sea_mask(targetxr, lsm, kind):
     outputxr = targetxr.where(lsm_mask['lsm'])
     return(outputxr)
 
+
+def calc_clim (var,tres,product,experiment,ensemble,year_start,year_stop,path):
+    ## calculate climatology of a given xarray dataset
+    list4clim = [f"{path}{var}_{tres}_{product}_{experiment}_{ensemble}_{y}0101-{y}1231.nc" for y in range(year_start,year_stop+1)]
+    baseclim = xr.open_mfdataset(list4clim)
+    xr_clim = baseclim.groupby("time.dayofyear").mean("time")
+    return (xr_clim)
+
+def cdo_anom(nc_var,y,product,experiment,mmbname,inpath,outpath):
+    
+    """
+    Call CDO to calculate anomaly for the indicated year
+    
+    Antonello A. Squintu 2023-11-05
+    
+    Parameters
+    ----------
+    nc_var: str
+        variable name, as it appears in the name of the file and in the path
+    y: int
+        target year (e.g. 1981)
+    product: str
+        name of the product (e.g. 'reanalysis')
+    experiment: str
+        name of the experiment according to Freva (e.g. 'era5',...)
+    mmb: int
+        number of the ensemble member
+    inpath: str
+        full path where the input files are stored
+    outpath: str
+        full path where the output files are to be stored
+        
+    
+    Returns
+    -------
+        Creates netcdf file in outpath
+    
+    """
+    print(f'Producing daily anomalies netcdf for {nc_var}, year {y}')
+    infile = f'{inpath}{nc_var}_day_{product}_{experiment}_{mmbname}_{y}0101-{y}1231.nc'
+    climfile = f'{outpath}{nc_var}_dailyclim_{product}_{experiment}_{mmbname}_clim8110.nc'
+    outfile = f'{outpath}{nc_var}_dailyanom_{product}_{experiment}_{mmbname}_{y}0101-{y}1231.nc'
+    os.system(f'cdo -b 32 -ydaysub {infile} {climfile} {outfile}')
+
+def cdo_clim(nc_var,year_start,year_stop,product,experiment,mmbname,inpath,outpath):
+    
+    """
+    Call CDO to calculate climatology
+    
+    Antonello A. Squintu 2023-11-05
+    
+    Parameters
+    ----------
+    nc_var: str
+        variable name, as it appears in the name of the file and in the path
+    year_start: int
+        first year in the range of the reference period (e.g. 1981)
+    year_stop: int
+        last year in the range of the reference period (e.g. 2010)
+    product: str
+        name of the product (e.g. 'reanalysis')
+    experiment: str
+        name of the experiment according to Freva (e.g. 'era5',...)
+    mmb: int
+        number of the ensemble member
+    inpath: str
+        full path where the input files are stored
+    outpath: str
+        full path where the output files are to be stored
+        
+    
+    Returns
+    -------
+        Creates netcdf file in outpath
+    
+    """
+    print(f'Producing climatology netcdf for {nc_var}, from {year_start} to {year_stop}')
+    ## Copy the yearly files needed to calculate the climatology and name them temp_yyyy.nc, so thath
+    ## you can call them within cdo ydayrunmean
+    for y in range(year_start,year_stop+1):
+        infile = f'{inpath}{nc_var}_day_{product}_{experiment}_{mmbname}_{y}0101-{y}1231.nc'
+        outfile = f'{outpath}temp_{y}.nc'
+        os.system(f'cp {infile} {outfile} ')
+    ## Calculate daily climatology with a 31-days running window
+    infiles = f'{outpath}temp_*.nc'
+    outfile = f'{outpath}{nc_var}_dailyclim_{product}_{experiment}_{mmbname}_clim8110.nc'
+    os.system(f'cdo -b 32 -ydrunmean,31 -cat "{infiles}" "{outfile}"')
+    os.system(f'rm {outpath}temp_*.nc')
+
+def cdo_daily_aggr(nc_var,y,aggr_operator,tres_filename,product,experiment,mmbname,inpath,outpath): 
+    
+    """
+    Call CDO to calculate climatology
+    
+    Antonello A. Squintu 2023-11-07
+    
+    Parameters
+    ----------
+    nc_var: str
+        variable name, as it appears in the name of the file and in the path
+    y: int
+        year (e.g. 1981)
+    aggr_operator: str
+        which operator apply to hourly values to get daily values (e.g. 'mean','max')
+    product: str
+        name of the product (e.g. 'reanalysis')
+    experiment: str
+        name of the experiment according to Freva (e.g. 'era5',...)
+    mmb: int
+        number of the ensemble member
+    inpath: str
+        full path where the input files are stored
+    outpath: str
+        full path where the output files are to be stored
+        
+    
+    Returns
+    -------
+        Creates netcdf file in outpath
+    
+    """
+    print(f'Producing file with daily data for {nc_var}, year {y}')
+    infiles = f'{inpath}{nc_var}_{tres_filename}_{product}_{experiment}_{mmbname}_{y}*-{y}*.nc'
+    outfile = f'{outpath}{nc_var}_day_{product}_{experiment}_{mmbname}_{y}0101-{y}1231.nc'
+    os.system(f'cdo day{aggr_operator} -mergetime {infiles} {outfile}')
+    
 def daily_series_w_lags(xrdf, nc_var, drivers_row, targetdate_ts, what, kind, plotdir):
 
     y = targetdate_ts.year
     m = str(targetdate_ts.month).zfill(2)
     d = str(targetdate_ts.day).zfill(2)
     
+    unit = drivers_row['unit']
     vmin = drivers_row['vmin']
     vmax = drivers_row['vmax']
-
-    
+    if np.isnan(vmin):
+        vmin = None
+    if np.isnan(vmax):
+        vmax = None
     
     
     if what == 'centroid':
@@ -180,143 +312,19 @@ def daily_series_w_lags(xrdf, nc_var, drivers_row, targetdate_ts, what, kind, pl
       
                                 
 
-        
+     
     ax.set_ylim(vmin,vmax)   
     plt.title(f'{var} daily series ({y}), cluster {cl_name} {what}',fontsize=30)
+    plt.ylabel(f'{var} [{unit}]',fontsize=15)
+    ax.tick_params(axis='both', which='major', labelsize=10)
     plt.axhline(y=0, color='k')
     lineminlag = plt.axvline(x = mintime_ts, color = 'b', label='cluster dates range')
     linemaxlag = plt.axvline(x = maxtime_ts, color = 'b')
     lineevent = plt.axvline(x = targetdate_ts,color = 'k',lw=3,label='event',linestyle='dotted')
     plt.grid()
-    plt.legend()
+    plt.legend(fontsize=15)
     #plt.savefig(f"{plotdir}CLINT050_{y}{m}{d}case_{var}_{cl_name}_{what}.png", facecolor='w')
     plt.show()
-
-def calc_clim (var,tres,product,experiment,ensemble,year_start,year_stop,path):
-    ## calculate climatology of a given xarray dataset
-    list4clim = [f"{path}{var}_{tres}_{product}_{experiment}_{ensemble}_{y}0101-{y}1231.nc" for y in range(year_start,year_stop+1)]
-    baseclim = xr.open_mfdataset(list4clim)
-    xr_clim = baseclim.groupby("time.dayofyear").mean("time")
-    return (xr_clim)
-
-def cdo_anom(nc_var,y,product,experiment,mmb,inpath,outpath):
-    
-    """
-    Call CDO to calculate anomaly for the indicated year
-    
-    Antonello A. Squintu 2023-11-05
-    
-    Parameters
-    ----------
-    nc_var: str
-        variable name, as it appears in the name of the file and in the path
-    y: int
-        target year (e.g. 1981)
-    product: str
-        name of the product (e.g. 'reanalysis')
-    experiment: str
-        name of the experiment according to Freva (e.g. 'era5',...)
-    mmb: int
-        number of the ensemble member
-    inpath: str
-        full path where the input files are stored
-    outpath: str
-        full path where the output files are to be stored
-        
-    
-    Returns
-    -------
-        Creates netcdf file in outpath
-    
-    """
-    print(f'Producing daily anomalies netcdf for {nc_var}, year {y}')
-    infile = f'{inpath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc'
-    climfile = f'{outpath}{nc_var}_dailyclim_{product}_{experiment}_r{mmb}i1p1_clim8110.nc'
-    outfile = f'{outpath}{nc_var}_dailyanom_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc'
-    os.system(f'cdo -b 32 -ydaysub {infile} {climfile} {outfile}')
-
-def cdo_clim(nc_var,year_start,year_stop,product,experiment,mmb,inpath,outpath):
-    
-    """
-    Call CDO to calculate climatology
-    
-    Antonello A. Squintu 2023-11-05
-    
-    Parameters
-    ----------
-    nc_var: str
-        variable name, as it appears in the name of the file and in the path
-    year_start: int
-        first year in the range of the reference period (e.g. 1981)
-    year_stop: int
-        last year in the range of the reference period (e.g. 2010)
-    product: str
-        name of the product (e.g. 'reanalysis')
-    experiment: str
-        name of the experiment according to Freva (e.g. 'era5',...)
-    mmb: int
-        number of the ensemble member
-    inpath: str
-        full path where the input files are stored
-    outpath: str
-        full path where the output files are to be stored
-        
-    
-    Returns
-    -------
-        Creates netcdf file in outpath
-    
-    """
-    print(f'Producing climatology netcdf for {nc_var}, from {year_start} to {year_stop}')
-    ## Copy the yearly files needed to calculate the climatology and name them temp_yyyy.nc, so thath
-    ## you can call them within cdo ydayrunmean
-    for y in range(year_start,year_stop+1):
-        infile = f'{inpath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc'
-        outfile = f'{outpath}temp_{y}.nc'
-        os.system(f'cp {infile} {outfile} ')
-    ## Calculate daily climatology with a 31-days running window
-    infiles = f'{outpath}temp_*.nc'
-    outfile = f'{outpath}{nc_var}_dailyclim_{product}_{experiment}_r{mmb}i1p1_clim8110.nc'
-    os.system(f'cdo -b 32 -ydrunmean,31 -cat "{infiles}" "{outfile}"')
-    os.system(f'rm {outpath}temp_*.nc')
-
-def cdo_daily_aggr(nc_var,y,aggr_operator,tres_filename,product,experiment,mmb,inpath,outpath): 
-    
-    """
-    Call CDO to calculate climatology
-    
-    Antonello A. Squintu 2023-11-07
-    
-    Parameters
-    ----------
-    nc_var: str
-        variable name, as it appears in the name of the file and in the path
-    y: int
-        year (e.g. 1981)
-    aggr_operator: str
-        which operator apply to hourly values to get daily values (e.g. 'mean','max')
-    product: str
-        name of the product (e.g. 'reanalysis')
-    experiment: str
-        name of the experiment according to Freva (e.g. 'era5',...)
-    mmb: int
-        number of the ensemble member
-    inpath: str
-        full path where the input files are stored
-    outpath: str
-        full path where the output files are to be stored
-        
-    
-    Returns
-    -------
-        Creates netcdf file in outpath
-    
-    """
-    print(f'Producing file with daily data for {nc_var}, year {y}')
-    infiles = f'{inpath}{nc_var}_{tres_filename}_{product}_{experiment}_r{mmb}i1p1_{y}*-{y}*.nc'
-    outfile = f'{outpath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc'
-    os.system(f'cdo day{aggr_operator} -mergetime {infiles} {outfile}')
-    
     
     
 def expand_res_grid(submask_row,old_res=0.5,new_res=0.25):
@@ -334,7 +342,7 @@ def expand_res_grid(submask_row,old_res=0.5,new_res=0.25):
     add_df.columns = ['nodes_lat','nodes_lon']
     return (add_df)
 
-def get_anom_w_cdo(nc_var, year, kind, year_start, year_stop, aggr_operator, tres, product,experiment,mmb, mmbpath, workpath):
+def get_anom_w_cdo(nc_var, year, kind, year_start, year_stop, aggr_operator, tres, product,experiment,mmbname, mmbpath, workpath):
     """
     Get yearly files with daily anomalies, when not available
     
@@ -382,53 +390,53 @@ def get_anom_w_cdo(nc_var, year, kind, year_start, year_stop, aggr_operator, tre
         if (nc_var == 'swvl1'):
             tres_filename = '1hr-cf'
         ## If daily values haven't been calculated yet
-        if not (os.path.exists(f'{workpath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{year}0101-{year}1231.nc')):
+        if not (os.path.exists(f'{workpath}{nc_var}_day_{product}_{experiment}_{mmbname}_{year}0101-{year}1231.nc')):
             ## Check if we have all the hourly files for all months of that year
-            monthly_files_exist = [os.path.exists(f'{mmbpath}{nc_var}_{tres_filename}_{product}_{experiment}_r{mmb}i1p1_{year}{str(m).zfill(2)}01-{year}{str(m).zfill(2)}{endmonth[m-1]}.nc') for m in range(1,13)]
+            monthly_files_exist = [os.path.exists(f'{mmbpath}{nc_var}_{tres_filename}_{product}_{experiment}_{mmbname}_{year}{str(m).zfill(2)}01-{year}{str(m).zfill(2)}{endmonth[m-1]}.nc') for m in range(1,13)]
             if sum(monthly_files_exist)==12:
                 
-                cdo_daily_aggr(nc_var,year,aggr_operator,tres_filename,product,experiment,mmb,mmbpath,workpath)
-            elif not os.path.exists(f'{workpath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{year}0101-{year}1231_cropped.nc'):
+                cdo_daily_aggr(nc_var,year,aggr_operator,tres_filename,product,experiment,mmbname,mmbpath,workpath)
+            elif not os.path.exists(f'{workpath}{nc_var}_day_{product}_{experiment}_{mmbname}_{year}0101-{year}1231_cropped.nc'):
                 print(kind)
                 print(nc_var)
                 print(y)
                 print('Hourly data not available on DKRZ-Levente. Import data from JUNO/ZEUS')  
                 print("Here below the files that couldn't be found")
-                print(f'{mmbpath}{nc_var}_{tres}_{product}_{experiment}_r{mmb}i1p1_{year}1201-{year}12{endmonth[11]}.nc')
-                print(f'{workpath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{year}0101-{year}1231_cropped.nc')
+                print(f'{mmbpath}{nc_var}_{tres}_{product}_{experiment}_{mmbname}_{year}1201-{year}12{endmonth[11]}.nc')
+                print(f'{workpath}{nc_var}_day_{product}_{experiment}_{mmbname}_{year}0101-{year}1231_cropped.nc')
                 sys.exit()
 
     if tres == 'day':
         dailypath = mmbpath
         #If there's no yearly file with daily data
-        if not os.path.exists(f'{mmbpath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{year}0101-{year}1231.nc'):
+        if not os.path.exists(f'{mmbpath}{nc_var}_day_{product}_{experiment}_{mmbname}_{year}0101-{year}1231.nc'):
                 print(kind)
                 print(nc_var)
                 print(year)
                 print('Daily data not available on DKRZ-Levente. Import data from JUNO/ZEUS')  
                 print("Here below the files that couldn't be found")
-                print(f'{mmbpath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{year}0101-{year}1231.nc')
+                print(f'{mmbpath}{nc_var}_day_{product}_{experiment}_{mmbname}_{year}0101-{year}1231.nc')
                 sys.exit()
 
 
     ## Calculate climatology (if not yet)
-    if not os.path.exists(f'{workpath}{nc_var}_dailyclim_{product}_{experiment}_r{mmb}i1p1_clim8110.nc'):
-        yearly_files_exist = [os.path.exists(f'{dailypath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc') for y in range(year_start,year_stop+1)]
+    if not os.path.exists(f'{workpath}{nc_var}_dailyclim_{product}_{experiment}_{mmbname}_clim8110.nc'):
+        yearly_files_exist = [os.path.exists(f'{dailypath}{nc_var}_day_{product}_{experiment}_{mmbname}_{y}0101-{y}1231.nc') for y in range(year_start,year_stop+1)]
         ## Are there all the needed 30 files?
         if sum(yearly_files_exist)!=30:
             print(f'{nc_var}, some missing files of daily data between {year_start} and {year_stop}, retrieving them')
             for y in range(year_start,year_stop+1):
                 ## Is there a yearly file with daily data?
-                if not os.path.exists(f'{workpath}{nc_var}_day_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc'):
-                    cdo_daily_aggr(nc_var,y,aggr_operator,tres_filename,product,experiment,mmb,mmbpath,workpath)
+                if not os.path.exists(f'{workpath}{nc_var}_day_{product}_{experiment}_{mmbname}_{y}0101-{y}1231.nc'):
+                    cdo_daily_aggr(nc_var,y,aggr_operator,tres_filename,product,experiment,mmbname,mmbpath,workpath)
                 else:
                     print(f'Daily netcdf for {nc_var} about year {y} already exists')
         cdo_clim(nc_var=nc_var,
                  year_start=year_start,year_stop=year_stop,
-                 product=product,experiment=experiment,mmb=mmb,
+                 product=product,experiment=experiment,mmbname=mmbname,
                  inpath=dailypath,outpath=workpath)    
     cdo_anom(nc_var=nc_var,y=year,
-             product=product,experiment=experiment,mmb=mmb,
+             product=product,experiment=experiment,mmbname=mmbname,
              inpath=dailypath,outpath=workpath)
 
 def get_endmonth(y):
@@ -459,7 +467,7 @@ def loop_map_grids(drivers, dates_ts, variables, lsm, modelspecs1, varspecs, mac
                     kind_var = 'era5cds_var'
                 kind_aggr = 'era5_aggr'
                 #if machine == 'DKRZ':
-                #    datapaths = sum([[f"{modeldir1}{varrow[kind_aggr][0]}/atmos/{nc_var}/r{mmb}i1p1/" for mmb in modelrow["members_list"]] for i, modelrow in modelspecs1.iterrows()],[])
+                #    datapaths = sum([[f"{modeldir1}{varrow[kind_aggr][0]}/atmos/{nc_var}/{mmbname}/" for mmb in modelrow["members_list"]] for i, modelrow in modelspecs1.iterrows()],[])
                 experiment = 'era5'
                 product = 'reanalysis'
                 tres = varrow['era5_aggr'].values[0]
@@ -482,48 +490,56 @@ def loop_map_grids(drivers, dates_ts, variables, lsm, modelspecs1, varspecs, mac
             #print(models)
             for mdl in models:
                 #print(mdl)
-                mdl = models[0]
+                #mdl = models[0]
                 modelpath = modelspecs1.loc[modelspecs1['model_names']==mdl,'model_path'].values[0]
                 workpath = modelspecs1.loc[modelspecs1['model_names']==mdl,'work_path'].values[0]
                 members = modelspecs1.loc[modelspecs1['model_names']==mdl,'members_list'].values[0]
                 
                 for mmb in members:
 
-                    mmbpath = f"{modelpath}{tres}/{varrow['realm'].values[0]}/{nc_var}/r{mmb}i1p1/"
 
+                    if var == 'z500':
+                        mmbname = f'r{mmb}i1p1-050000Pa'
+                    else:
+                        mmbname = f'r{mmb}i1p1'
         
-        
-        
+                    mmbpath = f"{modelpath}{tres}/{varrow['realm'].values[0]}/{nc_var}/{mmbname}/"
+
                     ## If daily anomalies are not available, get them
-                    if not os.path.exists(f'{workpath}{nc_var}_dailyanom_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc'):
-                        get_anom_w_cdo(nc_var, y, kind, year_start, year_stop, aggr_operator, tres, product,experiment,mmb, mmbpath, workpath) 
+                    if not os.path.exists(f'{workpath}{nc_var}_dailyanom_{product}_{experiment}_{mmbname}_{y}0101-{y}1231.nc'):
+                        get_anom_w_cdo(nc_var, y, kind, year_start, year_stop, aggr_operator, tres, product,experiment,mmbname, mmbpath, workpath) 
 
-                    anom_xr = xr.open_dataset(f'{workpath}/{nc_var}_dailyanom_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc')
+                    anom_xr = xr.open_dataset(f'{workpath}/{nc_var}_dailyanom_{product}_{experiment}_{mmbname}_{y}0101-{y}1231.nc')
                     anom_xr = anom_xr.convert_calendar('gregorian') #convert to gregorian calendar
-                    #anom_xr['time'] = anom_xr.indexes['time'].normalize() #drop hour from time axis
-
-                    if np.max(anom_xr.lon)>180:
+                    anom_xr['time'] = anom_xr.indexes['time'].normalize() #drop hour from time axis
+                    
+                    if ((np.max(anom_xr.lon)>180) |
+                       (np.min(anom_xr.lon)<180)):
                         anom_xr = rearrange_lon (anom_xr)
 
                     dims = list(anom_xr.dims)
 
                     if (('longitude' in dims) | ('latitude' in dims)):
-                        infile = f'{workpath}/{nc_var}_dailyanom_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc'
-                        outfile = f'{workpath}/{nc_var}_dailyanom_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc'
+                        infile = f'{workpath}/{nc_var}_dailyanom_{product}_{experiment}_{mmbname}_{y}0101-{y}1231.nc'
+                        outfile = f'{workpath}/{nc_var}_dailyanom_{product}_{experiment}_{mmbname}_{y}0101-{y}1231.nc'
                         command = f'cdo chname,longitude,lon {infile} {outfile}'
 
-                        infile = f'{workpath}/{nc_var}_dailyanom_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc'
-                        outfile  = f'{workpath}/{nc_var}_dailyanom_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc'
+                        infile = f'{workpath}/{nc_var}_dailyanom_{product}_{experiment}_{mmbname}_{y}0101-{y}1231.nc'
+                        outfile  = f'{workpath}/{nc_var}_dailyanom_{product}_{experiment}_{mmbname}_{y}0101-{y}1231.nc'
                         command = f'cdo chname,latitude,lat {infile} {outfile}'
 
-                        anom_xr = xr.open_dataset(f'{workpath}/{nc_var}_dailyanom_{product}_{experiment}_r{mmb}i1p1_{y}0101-{y}1231.nc')
+                        anom_xr = xr.open_dataset(f'{workpath}/{nc_var}_dailyanom_{product}_{experiment}_{mmbname}_{y}0101-{y}1231.nc')
                         anom_xr = anom_xr.convert_calendar('gregorian')
 
-                        if np.max(anom_xr.lon)>180:
+                        if ((np.max(anom_xr.lon)>180) |
+                            (np.min(anom_xr.lon)<180)):
                             anom_xr = clint.rearrange_lon (anom_xr)  
                             
-                    if var == 'mslp':
+                    if var == 'mslp': #conversion from Pa to hPa
                         anom_xr[nc_var] = anom_xr[nc_var]/100
+                    
+                    if var == 'tp': #conversion from kg/(m^2*s) to mm
+                        anom_xr[nc_var] = anom_xr[nc_var]*86400
                         
                     for index, drivers_row in drivers_sub.iterrows():
                         mask_df = pd.read_csv(f"{maskdir}{drivers_row['clmask_path']}{drivers_row['clmask_file']}",index_col=[0])
@@ -531,8 +547,8 @@ def loop_map_grids(drivers, dates_ts, variables, lsm, modelspecs1, varspecs, mac
                         submask = mask_df[mask_df.cluster == cl_nr-1] #python indexing, cluster 1 is nr0 in the mask file...
                         maskedanom = mask_xr_w_df(var, anom_xr, submask, lsm, kind)
                         
-                        multimaps_lag (xrdf = maskedanom, targetdate_ts = date_ts, 
-                                            drivers_row = drivers_row, kind=kind, machine=machine, plotdir = plotdir,
+                        multimaps_lag (xrdf = maskedanom, targetdate_ts = date_ts,
+                                            drivers_row = drivers_row, kind=kind, machine=machine, plotdir = plotdir, #submask_df, 
                                             proj = 'Ortographic', 
                                             vmin='drivers', vmax='drivers')
                         daily_series_w_lags(maskedanom, nc_var, drivers_row, date_ts, 'average', kind, plotdir)
@@ -612,7 +628,15 @@ def mask_xr_w_df (var, xrdf, submask, lsm, kind):
     exp_df['cluster'] = np.nanmean(submask['cluster']) #add the missing column so that it can be merged to submask
     ## Append the new gridpoints to the original 2x2 mask
     submask_exp = pd.concat([submask,exp_df],ignore_index=True).drop_duplicates().reset_index(drop=True)
-
+    
+    ## If data between 178E and 180E are forgotten, add them manually
+    add_list = [new_gps_cdl(submask_exp,nlat) for nlat in np.unique(submask_exp['nodes_lat'])]
+    add_list = [i for i in add_list if i is not None]
+    if len(add_list)>0:
+        add_df = pd.concat(add_list,ignore_index=True).reset_index(drop=True)
+        add_df['cluster'] = submask_exp.iloc[0]['cluster']
+        submask_exp = pd.concat([submask_exp,add_df],ignore_index=True).reset_index(drop=True)
+    
     mask = submask_exp.assign(flag=1).set_index(["nodes_lon", "nodes_lat"]).flag.to_xarray().fillna(0).rename({"nodes_lon": 'lon', "nodes_lat": 'lat'})
 
 
@@ -630,12 +654,33 @@ def mask_xr_w_df (var, xrdf, submask, lsm, kind):
     
     return(sub_xrdf)
 
-   
-def multimaps_lag (xrdf, targetdate_ts, drivers_row, kind, machine, plotdir,
-                   proj='Ortographic', vmin='drivers', vmax='drivers',):
+def midpoint_spherical_interpolation(lon1, lat1, lon2, lat2, t=0.5):
+    # Convert decimal degrees to radians
+    lon1, lat1, lon2, lat2 = map(math.radians, [lon1, lat1, lon2, lat2])
+
+    # Spherical interpolation
+    delta_lon = lon2 - lon1
+    delta_lat = lat2 - lat1
+
+    a = math.sin((1 - t) * delta_lat) / math.sin(delta_lat)
+    b = math.sin(t * delta_lat) / math.sin(delta_lat)
+
+    x = a * math.cos(lat1) * math.cos(lon1) + b * math.cos(lat2) * math.cos(lon2)
+    y = a * math.cos(lat1) * math.sin(lon1) + b * math.cos(lat2) * math.sin(lon2)
+    z = a * math.sin(lat1) + b * math.sin(lat2)
+
+    # Convert back to decimal degrees
+    mid_lon = math.degrees(math.atan2(y, x))
+    mid_lat = math.degrees(math.atan2(z, math.sqrt(x**2 + y**2)))
+
+    return [mid_lon, mid_lat]
+
+
+def multimaps_lag (xrdf, targetdate_ts, drivers_row, kind, machine, plotdir,# submask_df,
+                   proj='Ortographic', vmin='drivers', vmax='drivers'):
     
     
-    
+    polar = False
     var = drivers_row['var']
     cl_name = drivers_row['cl_name']
     
@@ -653,6 +698,11 @@ def multimaps_lag (xrdf, targetdate_ts, drivers_row, kind, machine, plotdir,
     if vmax == 'drivers':
         vmax = drivers_row['vmax']
         var = drivers_row['var']
+    
+    if np.isnan(vmin):
+        vmin = None
+    if np.isnan(vmax):
+        vmax = None
         
     if kind == 'ERA5':
         if machine == 'DKRZ':
@@ -692,16 +742,53 @@ def multimaps_lag (xrdf, targetdate_ts, drivers_row, kind, machine, plotdir,
     NC_lon, NC_lat = my_projn.transform_point(drivers_row['cl_ortho_lon'], 
                                             drivers_row['cl_ext_N']+1, 
                                             lonlatproj) #(3189068.5, 0)
-
     xmin,xmax,ymin,ymax = min(SW_lon,NW_lon), max(NE_lon,SE_lon), min(SW_lat,SE_lat,SC_lat), max(NE_lat,NW_lat, NC_lat)
-        
-    ## DEFINE SIZE OF SUBPLOTS
+    
     
     numfigs = len(range(minlag,maxlag+1)) ## number of figures depends on how many days
     numfigs_h = np.floor((12000000/(xmax-xmin)+3)/2) ## number of figures per row depends on the size of the cluster
     numfigs_v = np.ceil(numfigs/numfigs_h) ## number of rows is calculated by consequence
 
     map_ratio = (xmax-xmin)/(ymax-ymin) ## width divided by height
+    
+    if (abs(drivers_row['cl_ortho_lat'])>=80):
+        print('switch to polar view')
+        polar = True
+        numfigs_h = 3
+        numfigs_v = np.ceil(numfigs/numfigs_h)
+        map_ratio = 1.1
+        
+    # SW_lon, SW_lat = my_projn.transform_point(drivers_row['cl_ext_W']-1, 
+    #                                         drivers_row['cl_ext_S']-1, 
+    #                                         lonlatproj)  #(0.0, -3189068.5)
+    # NE_lon, NE_lat = my_projn.transform_point(drivers_row['cl_ext_E']+1, 
+    #                                         drivers_row['cl_ext_N']+1, 
+    #                                         lonlatproj) #(3189068.5, 0)
+    # NW_lon, NW_lat = my_projn.transform_point(drivers_row['cl_ext_W']-1, 
+    #                                         drivers_row['cl_ext_N']+1, 
+    #                                         lonlatproj)  #(0.0, -3189068.5)
+    # SE_lon, SE_lat = my_projn.transform_point(drivers_row['cl_ext_E']+1, 
+    #                                         drivers_row['cl_ext_S']-1, 
+    #                                         lonlatproj) #(3189068.5, 0)
+    # SC_lon, SC_lat = my_projn.transform_point((((drivers_row['cl_ortho_lon']-90)+180)%360-180), 
+    #                                         drivers_row['cl_ext_S']-1, 
+    #                                         lonlatproj) #(3189068.5, 0)
+    # print((((drivers_row['cl_ortho_lon']-90)+180)%360-180))
+    # NC_lon, NC_lat = my_projn.transform_point((((drivers_row['cl_ortho_lon']+90)+180)%360-180), 
+    #                                         drivers_row['cl_ext_S']-1, 
+    #                                         lonlatproj) #(3189068.5, 0)
+    # print((((drivers_row['cl_ortho_lon']+90)+180)%360-180))
+    # print(drivers_row['cl_ext_S'])
+
+    # xmin = my_projn.transform_point(drivers_row['cl_ortho_lon'], 
+    #                                     drivers_row['cl_ext_N']+1, 
+    #                                     lonlatproj)
+
+    
+    #print([xmin,xmax,ymin,ymax])   
+    ## DEFINE SIZE OF SUBPLOTS
+    
+
     
     ax_width = drivers_row['ax_width']
     if np.isnan(ax_width):        
@@ -765,7 +852,7 @@ def multimaps_lag (xrdf, targetdate_ts, drivers_row, kind, machine, plotdir,
         #print(sub1d.variables)
         
         cs=sub1d[nc_var].plot(ax=geo_axes,transform=ccrs.PlateCarree(),cmap=palette, 
-                           vmin = vmin, vmax = vmax,add_colorbar=False)
+                           vmin = vmin, vmax = vmax, add_colorbar=False)
         
         
         
@@ -780,13 +867,20 @@ def multimaps_lag (xrdf, targetdate_ts, drivers_row, kind, machine, plotdir,
         #              s=f'-{lag}d', transform=ccrs.PlateCarree(), fontsize=70)
         geo_axes.text(x=0.875, y=0.9, horizontalalignment='center', verticalalignment='center',
                       s=f'-{lag}d', transform=geo_axes.transAxes, fontsize=70)
-        geo_axes.set_extent([xmin,xmax,ymin,ymax], crs=my_projn) # data/projection coordinates 
+        if not polar:
+            geo_axes.set_extent([xmin,xmax,ymin,ymax], crs=my_projn) # data/projection coordinates 
         #print(f'before this, {f}')
-        
-        gl = geo_axes.gridlines(lonlatproj,linewidth=2, color='lightgray', alpha=0.5)
+        else:
+             geo_axes.set_extent([-180, 180, drivers_row['cl_ext_S']-1 , 90], crs=lonlatproj)
+        gl = geo_axes.gridlines(lonlatproj,linewidth=2, color='lightgray', alpha=0.5, draw_labels=True,)
         gl.xlocator = mticker.FixedLocator(np.arange(-180, 180, 5))
         gl.ylocator = mticker.FixedLocator(np.arange(-90, 90, 5))
-        
+        gl.top_labels = False
+        gl.left_labels = False
+        gl.xlabel_style = {'size': 15, 'color': 'gray'}
+        gl.ylabel_style = {'size': 15, 'color': 'gray'}
+
+        #cartopy.mpl.gridliner.Gridliner(axes, crs, draw_labels=False, xlocator=None, ylocator=None, collection_kwargs=None)
         
         plt.title(None)
         
@@ -814,44 +908,77 @@ def multimaps_lag (xrdf, targetdate_ts, drivers_row, kind, machine, plotdir,
 
     #plt.savefig(f"{plotdir}CLINT040_maps_{y}{m}{d}case_{var}_Test{drivers_row['exp']}{drivers_row['exp_size']}{cl_name}.png", facecolor='w')
 
+def new_gps_cdl(submask_exp,nlat):
+    asiaside = submask_exp.loc[(submask_exp['nodes_lat']==nlat) & (submask_exp['nodes_lon']==178.25)].shape[0]
+    amerside = submask_exp.loc[(submask_exp['nodes_lat']==nlat) & (submask_exp['nodes_lon']==-180)].shape[0]
+    if (asiaside & amerside):
+        add_df = pd.DataFrame([(x, nlat) for x in np.arange(178.5,180,0.25)])
+        add_df.columns = ['nodes_lat','nodes_lon']
+        return(add_df)
+
 def palette_CLINT (var,n=20):
     #print(f'palette: {var}')
-    if var == 'mslp':
-        print(var)
-        pltt = mpl.colors.LinearSegmentedColormap.from_list('Pressure', (
-    # Edit this gradient at https://eltos.github.io/gradient/#Pressure=0:4A0062-20:8E1CC4-40.1:CBADE1-50:FFF2C5-59.9:9BCF9F-80:38955C-100:004B32
-    (0.000, (0.290, 0.000, 0.384)),
-    (0.200, (0.557, 0.110, 0.769)),
-    (0.401, (0.796, 0.678, 0.882)),
-    (0.500, (1.000, 0.949, 0.773)),
-    (0.599, (0.608, 0.812, 0.624)),
-    (0.800, (0.220, 0.584, 0.361)),
-    (1.000, (0.000, 0.294, 0.196))), N=n)
+    
+    if var == 'z500':
+        pltt = mpl.colors.LinearSegmentedColormap.from_list('Geopotential', (
+        # Edit this gradient at https://eltos.github.io/gradient/#Geopotential=0:0D5E00-20:5A9522-50:FFF2C5-80:C32A88-100:5D0040
+        (0.000, (0.051, 0.369, 0.000)),
+        (0.200, (0.353, 0.584, 0.133)),
+        (0.500, (1.000, 0.949, 0.773)),
+        (0.800, (0.765, 0.165, 0.533)),
+        (1.000, (0.365, 0.000, 0.251))), N=n)
+    
+    elif var == 'mslp':
+        #print(var)
+        pltt = mpl.colors.LinearSegmentedColormap.from_list('Random gradient 9876', (
+        # Edit this gradient at https://eltos.github.io/gradient/#Random%20gradient%209876=0:004B32-20:38955C-50:FFF2C5-80:8E1CC4-100:4A0062
+        (0.000, (0.000, 0.294, 0.196)),
+        (0.200, (0.220, 0.584, 0.361)),
+        (0.500, (1.000, 0.949, 0.773)),
+        (0.800, (0.557, 0.110, 0.769)),
+        (1.000, (0.290, 0.000, 0.384))), N=n)
         
+    elif var == 'sic':
+        pltt = mpl.colors.LinearSegmentedColormap.from_list('SeaIce', (
+        # Edit this gradient at https://eltos.github.io/gradient/#SeaIce=0:025F0D-25:27B638-50:B9B9B9-75.2:3CA4CB-100:165872
+        (0.000, (0.008, 0.373, 0.051)),
+        (0.250, (0.153, 0.714, 0.220)),
+        (0.500, (0.725, 0.725, 0.725)),
+        (0.752, (0.235, 0.643, 0.796)),
+        (1.000, (0.086, 0.345, 0.447))), N=n)
+       
     elif var == 'sm':
         pltt = mpl.colors.LinearSegmentedColormap.from_list('SoilMoisture', (
-    # Edit this gradient at https://eltos.github.io/gradient/#SoilMoisture=0:44000D-24.9:D5572D-50:FFF3C8-75.1:42A36D-100:00343C
-    (0.000, (0.267, 0.000, 0.051)),
-    (0.249, (0.835, 0.341, 0.176)),
-    (0.500, (1.000, 0.953, 0.784)),
-    (0.751, (0.259, 0.639, 0.427)),
-    (1.000, (0.000, 0.204, 0.235))), N=n)
-        return(pltt)
+        # Edit this gradient at https://eltos.github.io/gradient/#SoilMoisture=0:44000D-24.9:D5572D-50:FFF3C8-75.1:42A36D-100:00343C
+        (0.000, (0.267, 0.000, 0.051)),
+        (0.249, (0.835, 0.341, 0.176)),
+        (0.500, (1.000, 0.953, 0.784)),
+        (0.751, (0.259, 0.639, 0.427)),
+        (1.000, (0.000, 0.204, 0.235))), N=n)
     
     elif var == 'tmax':
         pltt = mpl.colors.LinearSegmentedColormap.from_list('Temperature', (
-    # Edit this gradient at https://eltos.github.io/gradient/#Temperature=0:0D0038-15.4:0C4AAA-35:89C0C5-50:FFF2C5-65:FFA88F-84.6:BA2628-100:61001A
-    (0.000, (0.051, 0.000, 0.220)),
-    (0.154, (0.047, 0.290, 0.667)),
-    (0.350, (0.537, 0.753, 0.773)),
-    (0.500, (1.000, 0.949, 0.773)),
-    (0.650, (1.000, 0.659, 0.561)),
-    (0.846, (0.729, 0.149, 0.157)),
-    (1.000, (0.380, 0.000, 0.102))), N=n)
-        
+        # Edit this gradient at https://eltos.github.io/gradient/#Temperature=0:0D0038-15.4:0C4AAA-35:89C0C5-50:FFF2C5-65:FFA88F-84.6:BA2628-100:61001A
+        (0.000, (0.051, 0.000, 0.220)),
+        (0.154, (0.047, 0.290, 0.667)),
+        (0.350, (0.537, 0.753, 0.773)),
+        (0.500, (1.000, 0.949, 0.773)),
+        (0.650, (1.000, 0.659, 0.561)),
+        (0.846, (0.729, 0.149, 0.157)),
+        (1.000, (0.380, 0.000, 0.102))), N=n)
+    elif var == 'tp':
+        pltt = mpl.colors.LinearSegmentedColormap.from_list('Precipitation', (
+        # Edit this gradient at https://eltos.github.io/gradient/#Precipitation=0:453000-12:A38241-25:FFF2C5-50:78D2B3-70.5:3A9E94-100:034E55
+        (0.000, (0.271, 0.188, 0.000)),
+        (0.120, (0.639, 0.510, 0.255)),
+        (0.250, (1.000, 0.949, 0.773)),
+        (0.500, (0.471, 0.824, 0.702)),
+        (0.705, (0.227, 0.620, 0.580)),
+        (1.000, (0.012, 0.306, 0.333))), N=n)    
     else:
         print('This variable does not have a customized palette')
         pltt = plt.cm.PuOr
+        
     return(pltt) 
 
 

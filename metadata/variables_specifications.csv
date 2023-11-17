@@ -1,5 +1,9 @@
 var,unit,realm,era5cds_var,era5cmor_var,cmip6_var,var4path,era5_aggr,aggr_operator,vmin,vmax
-tmax,°C,atmos,mx2t,tasmax,tasmax,mx2t,day,max,-10.0,10.0
-mslp,hPa,atmos,msl,psl,psl,msl,1hr,mean,-20.0,20.0
+tmax,°C,atmos,mx2t,tasmax,tasmax,mx2t,day,max,-15.0,15.0
+mslp,hPa,atmos,msl,psl,psl,msl,1hr,mean,-25.0,25.0
 sm,m^3/m^3,land,swvl1,swvl1,mrsos,sm1,1hr,mean,-0.2,0.2
-z500,m,atmos,z500,zg,zg,z500,day,mean,,
+z500,m,atmos,z500,zg,zg,z500,day,mean,-250.0,250.0
+tp,mm/day,atmos,tp,pr,pr,tp,day,sum,-5.0,-15.0
+sic,%,seaIce,sic,sic,sic,sic,1hr,mean,-50.0,50.0
+sst,°C,ocean,sst,tos,tos,sst,1hr,mean,,
+olr,W/m^2,atmos,olr,rlut,rlut,olr,1hr,mean,-50.0,
